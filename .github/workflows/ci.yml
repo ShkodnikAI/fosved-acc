@@ -57,6 +57,9 @@ jobs:
         run: |
           set -o pipefail
           ./probes/run.sh mlog | tee probes-result.md
+      - name: Итоги проб в аннотации (читаются через API check-runs)
+        if: always()
+        run: grep '^| B' probes-result.md | while IFS= read -r l; do echo "::notice title=probe::$l"; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -88,6 +91,7 @@ jobs:
             sleep 1
           done
           echo "health: $body"
+          echo "::notice title=health::$body"
           docker logs acc | tail -20
           echo "$body" | grep -q '"status":"ok"'
 
@@ -97,9 +101,10 @@ jobs:
     # Информационная джоба: внешние сайты могут быть недоступны с раннера.
     # Результат читается в логе, на мерж не влияет (не проверка качества кода).
     continue-on-error: true
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: C.3 — срок регистрации домена (RDAP/WHOIS, без персональных данных)
-        run: python3 scripts/research/domain_expiry.py tega.plus pravo.by
+        run: python3 scripts/research/domain_expiry.py tega.plus pravo.by | tee c3.txt; grep '^- ' c3.txt | head -10 | while IFS= read -r l; do echo "::notice title=C.3::$l"; done
       - name: C.2 — ленты pravo.by и tnpa.by
-        run: ./scripts/research/legal_feeds.sh
+        run: ./scripts/research/legal_feeds.sh | tee c2.txt; grep -v '^    ' c2.txt | head -10 | while IFS= read -r l; do echo "::notice title=C.2::$l"; done
