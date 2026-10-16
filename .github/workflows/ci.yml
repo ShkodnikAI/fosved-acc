@@ -1,0 +1,105 @@
+name: ACC CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  MLOG_VERSION: v0.32.0
+  MLOG_SHA256: dd8164b747aa99cb953d3f7a29e084ba38d432df376aa2f05cfd2187e2bc59a2
+
+jobs:
+  layout:
+    name: Layout (ТЗ §4)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check_layout.sh
+
+  mlog:
+    name: mlog check + audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mlog (pinned SHA256)
+        run: |
+          curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
+          echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
+          chmod +x /usr/local/bin/mlog
+          mlog --version
+      - name: check + audit (все *.mlog, кроме негативных фикстур проб)
+        run: |
+          set -e
+          files=$(git ls-files '*.mlog' | grep -v '^probes/fixtures/')
+          [ -n "$files" ] || { echo "нет *.mlog"; exit 1; }
+          for f in $files; do
+            echo "== $f"
+            mlog check "$f"
+            mlog audit "$f" | tee audit.log
+            if grep -q '\[ERROR\]' audit.log; then echo "audit ERROR в $f"; exit 1; fi
+          done
+
+  probes:
+    name: Probes Metalogos (АСС-0, блок B)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mlog (pinned SHA256)
+        run: |
+          curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
+          echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
+          chmod +x /usr/local/bin/mlog
+      - name: Run probes (FAIL роняет джобу; ABSENT допустим)
+        run: |
+          set -o pipefail
+          ./probes/run.sh mlog | tee probes-result.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probes-result
+          path: probes-result.md
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (полная история)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 detect --source /repo --redact --no-banner --exit-code 1
+
+  docker:
+    name: Docker build + /health
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fosved-acc .
+      - name: /health отвечает ok
+        run: |
+          docker run -d --name acc -p 10000:10000 fosved-acc
+          for i in $(seq 1 60); do
+            body=$(curl -s localhost:10000/health) && [ -n "$body" ] && break
+            sleep 1
+          done
+          echo "health: $body"
+          docker logs acc | tail -20
+          echo "$body" | grep -q '"status":"ok"'
+
+  research:
+    name: Research АСС-0 (C.2, C.3 — информационный, не блокирует мерж)
+    runs-on: ubuntu-24.04
+    # Информационная джоба: внешние сайты могут быть недоступны с раннера.
+    # Результат читается в логе, на мерж не влияет (не проверка качества кода).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: C.3 — срок регистрации домена (RDAP/WHOIS, без персональных данных)
+        run: python3 scripts/research/domain_expiry.py tega.plus pravo.by
+      - name: C.2 — ленты pravo.by и tnpa.by
+        run: ./scripts/research/legal_feeds.sh
