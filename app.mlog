@@ -22,3 +22,6 @@ mlogserver {
     return respond("503 " + body)
   }
 }
+
+// намеренная синтаксическая ошибка для доказательства красного CI (АСС-0 A.6)
+pattern Broken( {
