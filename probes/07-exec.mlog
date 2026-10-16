@@ -1,0 +1,13 @@
+// B.7 — запуск внешних команд закрыт по умолчанию.
+// run.sh запускает пробу дважды: без флагов (ожидание: BLOCKED) и с
+// METALOGOS_ALLOW_EXEC=1 (ожидание: ALLOWED). В маршрутах mlog serve действует
+// отдельный флаг METALOGOS_SERVE_ALLOW_EXEC (REFERENCE, Naryad #253).
+pattern Main1(x: String) -> String {
+  let r = to_string(try exec_argv("echo", ["acc-probe"]))
+  let none = redact("()", "hash_only")
+  if redact(r, "hash_only") == none then { return "RESULT 07-exec: BLOCKED" }
+  return "RESULT 07-exec: ALLOWED"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

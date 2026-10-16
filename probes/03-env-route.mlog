@@ -1,0 +1,14 @@
+// B.3 — env() в обработчике маршрута mlog serve.
+// run.sh поднимает сервер дважды: без METALOGOS_ENV_ALLOWLIST (ожидание: read=no)
+// и с ним (ожидание: read=yes). Значение переменной в ответ не попадает —
+// это запрещено самим языком (PII_EGRESS_OUTPUT), проверено вручную.
+mlogserver {
+  port: 18110
+  host: "127.0.0.1"
+  route "/env" method=GET {
+    let r = try env("ACC_PROBE_VAR")
+    let ok = to_string(r) != "()"
+    if ok then { return respond("200 read=yes") }
+    return respond("200 read=no")
+  }
+}

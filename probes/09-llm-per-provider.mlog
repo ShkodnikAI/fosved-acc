@@ -1,0 +1,23 @@
+// B.9 — можно ли задать свою модель каждому провайдеру.
+// Два подставных провайдера (fixtures/fake_llm.py пишет пришедшее поле model).
+// У alpha ключа нет → запрос падает → резерв beta. Если beta получает
+// default_model, а не свою модель — у провайдеров нет собственной модели.
+// Третий аргумент call_llm задаёт модель на вызов, но не провайдера.
+llm {
+  providers: [
+    { alias: alpha, provider: openai_compatible, key: env("ACC_KEY_ALPHA"), url: "http://127.0.0.1:18099/alpha/v1/chat/completions" },
+    { alias: beta, provider: openai_compatible, key: env("ACC_KEY_BETA"), url: "http://127.0.0.1:18099/beta/v1/chat/completions" }
+  ],
+  default_model: "model-default",
+  failover: auto,
+  circuit_breaker: 3,
+  timeout: 10
+}
+pattern Main1(x: String) -> String {
+  let a = to_string(try call_llm("p", "i"))
+  let b = to_string(try call_llm("p", "i", "model-explicit"))
+  return "RESULT 09-llm-per-provider: done"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

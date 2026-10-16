@@ -1,0 +1,9 @@
+// Негативная фикстура B.2: query_param решает if без redact — обязан быть отказ.
+pattern Main1(x: String) -> String {
+  let r = to_string(query_param("q"))
+  if r == "yes" then { return "branch-yes" }
+  return "branch-no"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

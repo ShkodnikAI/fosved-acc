@@ -1,0 +1,18 @@
+// B.4 — защита от запросов во внутреннюю сеть (SSRF guard).
+// Три внутренних адреса должны быть отклонены; run.sh дополнительно ищет
+// в stderr ровно три строки "SSRF guard". Публичный https — отдельной
+// строкой, сеть в среде запуска может отсутствовать: тогда NOTE, не FAIL.
+pattern Main1(x: String) -> String {
+  let a = to_string(try http_get("http://127.0.0.1:9/"))
+  let b = to_string(try http_get("http://10.0.0.1/"))
+  let c = to_string(try http_get("http://169.254.169.254/latest/meta-data/"))
+  let none = redact("()", "hash_only")
+  let ha = redact(a, "hash_only")
+  let hb = redact(b, "hash_only")
+  let hc = redact(c, "hash_only")
+  if ha != none or hb != none or hc != none then { return "FAIL 04-ssrf: внутренний адрес не отклонён" }
+  return "PASS 04-ssrf: 127.0.0.1, 10.0.0.1, 169.254.169.254 отклонены"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

@@ -1,0 +1,28 @@
+// B.1 — нативное расписание (cron API, REFERENCE §4.17.3).
+// Проверяет: регистрация задания, видимость в списке, ручной запуск
+// (cron_run + cron_mark_fired → run_count), удаление.
+// Срабатывание по времени идёт только в `mlog serve` (scheduler tick 5 с) —
+// в этой пробе не проверяется, см. отчёт.
+pattern Main1(x: String) -> String {
+  let job = cron_add("*/5 * * * *", "acc-probe-tick", "Europe/Minsk", "skip")
+  let id = to_string(job.id)
+  if id == "" then { return "FAIL 01-schedule: cron_add вернул пустой id" }
+  let mut found = false
+  each j in cron_list() {
+    if to_string(j.id) == id then { let found = true }
+  }
+  if found == false then { return "FAIL 01-schedule: задания нет в cron_list" }
+  let r1 = cron_run(id)
+  let r2 = cron_mark_fired(id)
+  let mut runs = -1.0
+  each j in cron_list() {
+    if to_string(j.id) == id then { let runs = j.run_count }
+  }
+  let rm = cron_remove(id)
+  if runs < 1.0 then { return "FAIL 01-schedule: run_count не вырос после cron_mark_fired (" + to_string(runs) + ")" }
+  if to_string(rm.removed) != "1" then { return "FAIL 01-schedule: cron_remove не удалил задание" }
+  return "PASS 01-schedule: add/list/run/mark_fired/remove работают; tz и catch_up принимаются; cron_run/cron_mark_fired/cron_remove возвращают Struct, а не Float, как пишет REFERENCE §4.17.3"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}
