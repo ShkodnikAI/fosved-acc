@@ -1,0 +1,24 @@
+// АСС — администрирование собственных сайтов. Этап 0: только /health.
+// /health проверяет то, от чего зависит работа: каталог данных и SQLite.
+// Ответ: {"status":"ok"|"degraded","checks":{...}}; при degraded — HTTP 503.
+// Каталог данных — METALOGOS_DATA_DIR (по умолчанию ./data, ТЗ §13).
+
+db { url: "sqlite:data/acc.db" }
+
+mlogserver {
+  port: 10000
+  host: "0.0.0.0"
+  middleware: [rate_limit, security_headers]
+
+  route "/health" method=GET {
+    let data_ok = file_exists("data/.keep")
+    let db_r = try query("SELECT 1 AS one", [])
+    let none = redact("()", "hash_only")
+    let db_ok = redact(to_string(db_r), "hash_only") != none
+    let mut status = "ok"
+    if data_ok == false or db_ok == false then { let status = "degraded" }
+    let body = json_encode({status: status, checks: {data_dir: data_ok, sqlite: db_ok}})
+    if status == "ok" then { return respond("200 " + body) }
+    return respond("503 " + body)
+  }
+}
