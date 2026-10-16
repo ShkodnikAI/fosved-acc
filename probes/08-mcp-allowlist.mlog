@@ -1,0 +1,12 @@
+// B.8 — клиент MCP запускает только серверы из METALOGOS_MCP_ALLOWLIST.
+// run.sh запускает с METALOGOS_ALLOW_EXEC=1 и списком "uvx": вызов python3
+// обязан быть отклонён с MCP_NOT_ALLOWLISTED (ищется в stderr).
+pattern Main1(x: String) -> String {
+  let r = to_string(try mcp_call("python3", ["-c", "print(1)"], "echo", "{}"))
+  let none = redact("()", "hash_only")
+  if redact(r, "hash_only") == none then { return "RESULT 08-mcp-allowlist: REFUSED" }
+  return "RESULT 08-mcp-allowlist: CALLED"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

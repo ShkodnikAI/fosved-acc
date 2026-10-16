@@ -1,0 +1,27 @@
+// B.5 — ограниченные права на необратимое действие (REFERENCE §4.15.1).
+// Проверяет: once-право срабатывает один раз; чужая область отклоняется;
+// истёкшее право отклоняется. Удаление без права — fixtures/05-grants-bad.mlog
+// (отказ IRREVERSIBLE_NO_GRANT ещё до исполнения).
+db { url: "sqlite::memory:" }
+pattern Main1(x: String) -> String {
+  let _ = db_execute("CREATE TABLE t (id INTEGER)", [])
+  let _ = db_execute("INSERT INTO t (id) VALUES (1)", [])
+  let _ = db_execute("INSERT INTO t (id) VALUES (2)", [])
+  let _ = db_execute("INSERT INTO t (id) VALUES (3)", [])
+  let g = grant_issue("db:delete:t", 60, "once")
+  let first = to_string(try db_execute_with_grant(g, "DELETE FROM t WHERE id = 1", []))
+  let second = to_string(try db_execute_with_grant(g, "DELETE FROM t WHERE id = 2", []))
+  let g2 = grant_issue("db:delete:other", 60, "once")
+  let wrong = to_string(try db_execute_with_grant(g2, "DELETE FROM t WHERE id = 2", []))
+  let g3 = grant_issue("db:delete:t", 1, "once")
+  let _ = sleep(2.0)
+  let expired = to_string(try db_execute_with_grant(g3, "DELETE FROM t WHERE id = 3", []))
+  if first == "()" then { return "FAIL 05-grants: действие по праву не выполнено" }
+  if second != "()" then { return "FAIL 05-grants: once-право сработало дважды" }
+  if wrong != "()" then { return "FAIL 05-grants: право чужой области сработало" }
+  if expired != "()" then { return "FAIL 05-grants: истёкшее право сработало" }
+  return "PASS 05-grants: once один раз; чужая область и истёкший срок отклонены"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

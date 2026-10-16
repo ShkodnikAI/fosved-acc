@@ -1,0 +1,22 @@
+// B.10 — поле timeout в блоке llm соблюдается.
+// Подставной провайдер отвечает через 40 с; timeout 3 → вызов должен
+// оборваться примерно за 3–6 с (без поля — 30 с по умолчанию рантайма).
+llm {
+  providers: [
+    { alias: slow, provider: openai_compatible, key: env("ACC_KEY_ALPHA"), url: "http://127.0.0.1:18099/slow/v1/chat/completions" }
+  ],
+  default_model: "m",
+  failover: auto,
+  circuit_breaker: 3,
+  timeout: 3
+}
+pattern Main1(x: String) -> String {
+  let t0 = time()
+  let r = try call_llm("p", "i")
+  let dt = round(time() - t0)
+  if dt > 10.0 then { return "FAIL 10-llm-timeout: вызов длился " + to_string(dt) + " с при timeout 3" }
+  return "PASS 10-llm-timeout: вызов оборван за " + to_string(dt) + " с при timeout 3"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

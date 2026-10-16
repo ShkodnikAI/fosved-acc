@@ -1,0 +1,10 @@
+// Негативная фикстура B.5: DELETE без права — обязан быть отказ IRREVERSIBLE_NO_GRANT.
+db { url: "sqlite::memory:" }
+pattern Main1(x: String) -> String {
+  let _ = db_execute("CREATE TABLE t (id INTEGER)", [])
+  let _ = db_execute("DELETE FROM t WHERE id = 1", [])
+  return "deleted"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

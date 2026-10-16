@@ -1,0 +1,28 @@
+// B.6 — подписанный журнал действий (Action Ledger).
+// Действие по праву пишет запись; экспорт проверяется целым; копия с одной
+// изменённой записью должна не пройти проверку.
+db { url: "sqlite::memory:" }
+pattern Main1(x: String) -> String {
+  let _ = db_execute("CREATE TABLE t (id INTEGER)", [])
+  let _ = db_execute("INSERT INTO t (id) VALUES (1)", [])
+  let g = grant_issue("db:delete:t", 60, "once")
+  let _ = db_execute_with_grant(g, "DELETE FROM t WHERE id = 1", [])
+  let n = ledger_count()
+  if n < 1.0 then { return "FAIL 06-ledger: журнал пуст после действия по праву" }
+  let p = ledger_export("ledger-probe.jsonl")
+  let v = ledger_verify("ledger-probe.jsonl")
+  if to_string(v.ok) != "true" then { return "FAIL 06-ledger: целый экспорт не прошёл проверку: " + to_string(v.error_reason) }
+  let raw = read_file("ledger-probe.jsonl")
+  let lines = split(raw, "\n")
+  let first = to_string(get(lines, 0.0))
+  let tampered_first = replace(first, "\"scope\"", "\"scopX\"")
+  let tampered = replace(raw, first, tampered_first)
+  if redact(tampered, "hash_only") == redact(raw, "hash_only") then { return "FAIL 06-ledger: проба не смогла изменить запись (формат экспорта изменился)" }
+  let _ = write_file("ledger-tampered.jsonl", tampered)
+  let v2 = ledger_verify("ledger-tampered.jsonl")
+  if to_string(v2.ok) == "true" then { return "FAIL 06-ledger: изменённая запись не обнаружена" }
+  return "PASS 06-ledger: записей " + to_string(n) + ", экспорт проверен, подмена обнаружена (" + to_string(v2.error_reason) + ")"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

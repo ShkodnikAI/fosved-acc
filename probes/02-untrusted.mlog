@@ -1,0 +1,12 @@
+// B.2 — недоверенный ввод не может решать ветвление без redact.
+// Этот файл — допустимый вариант (redact перед if): должен исполниться.
+// Недопустимый вариант — fixtures/02-untrusted-bad.mlog: run.sh ждёт отказ
+// UNTRUSTED_DECISION при запуске и в mlog audit.
+pattern Main1(x: String) -> String {
+  let r = redact(to_string(query_param("q")), "all")
+  if r == "yes" then { return "PASS 02-untrusted: недоверенное значение после redact решает ветвление (ветка yes)" }
+  return "PASS 02-untrusted: недоверенное значение после redact решает ветвление"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}
