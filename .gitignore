@@ -1,0 +1,8 @@
+data/*
+!data/.keep
+!data/README.md
+.env
+*.db
+*.sqlite*
+*.jsonl
+__pycache__/
