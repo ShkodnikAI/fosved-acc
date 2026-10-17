@@ -1,0 +1,52 @@
+[
+  {
+    "file": "bad-01",
+    "rule": 1,
+    "want_prefix": "timezone:"
+  },
+  {
+    "file": "bad-02",
+    "rule": 2,
+    "want_prefix": "slug:"
+  },
+  {
+    "file": "bad-03",
+    "rule": 3,
+    "want_prefix": "url:"
+  },
+  {
+    "file": "bad-04",
+    "rule": 4,
+    "want_prefix": "profile:"
+  },
+  {
+    "file": "bad-05",
+    "rule": 5,
+    "want_prefix": "participation:"
+  },
+  {
+    "file": "bad-06",
+    "rule": 6,
+    "want_prefix": "platform.adapter:"
+  },
+  {
+    "file": "bad-07",
+    "rule": 7,
+    "want_prefix": "people.approver_tg_env:"
+  },
+  {
+    "file": "bad-08",
+    "rule": 8,
+    "want_prefix": "repo.github:"
+  },
+  {
+    "file": "bad-09",
+    "rule": 9,
+    "want_prefix": "sources:"
+  },
+  {
+    "file": "bad-10",
+    "rule": 10,
+    "want_prefix": "domain.warn_days:"
+  }
+]

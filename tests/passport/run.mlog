@@ -1,0 +1,100 @@
+// Тест валидатора паспорта (наряд АСС-1.1, A.4).
+// Запуск из корня репо: mlog run tests/passport/run.mlog
+// Ожидаемый итог: PASSPORT OK=11 FAIL=0
+//  - sites/tega/passport.json проходит (правил 10);
+//  - bad-01..bad-10.json отклоняются, каждый — своим правилом
+//    (префикс ошибки совпадает с ожидаемым полем).
+//
+// Запуск из CI: mlog run tests/passport/run.mlog | tee /dev/stderr | grep -q "FAIL=0"
+// Строки отчёта начинаются с вердикта "1"/"0"; решения по результатам
+// валидатора (недоверенные данные) — через inline-барьер
+// redact(to_string(pred), "hash_only") (рецепт #546 FOSVED-office-v2).
+
+import core/passport as p
+
+// Один прогон: "1|..." если совпало ожидание, "0|..." если нет.
+pattern CheckFile(path: String, good: Bool, want: String, label: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  let text = read_file(path)
+  let r = p.ValidatePassport(text)
+  if redact(to_string(good), "hash_only") == REF_TRUE {
+    let is_ok = redact(to_string(r == "ok"), "hash_only")
+    if is_ok == REF_TRUE {
+      return "1|  " + label + ": ok"
+    }
+    return "0|  " + label + ": FAIL — ожидалось ok, получено: " + redact(r, "all")
+  }
+  let is_ok2 = redact(to_string(r == "ok"), "hash_only")
+  if is_ok2 == REF_TRUE {
+    return "0|  " + label + ": FAIL — ожидалась ошибка " + want + ", получено ok"
+  }
+  let prefix = substring(r, 0.0, length(want))
+  let want_match = redact(to_string(prefix == want), "hash_only")
+  if want_match == REF_TRUE {
+    return "1|  " + label + ": ok — правило ловится"
+  }
+  return "0|  " + label + ": FAIL — ожидался префикс " + want + ", получено: " + redact(r, "all")
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  let mut rep = ""
+  // 1. настоящий паспорт ТЕГА проходит
+  let l0 = CheckFile("sites/tega/passport.json", true, "", "tega")
+  let v0 = substring(l0, 0.0, 1.0)
+  if redact(to_string(v0 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l0, 2.0, length(l0)) + "\n"
+  // 2..11 — негативные фикстуры, каждая ловится своим правилом
+  let l1 = CheckFile("tests/passport/bad-01.json", false, "timezone:", "bad-01 (правило 1: обязательные поля)")
+  let l2 = CheckFile("tests/passport/bad-02.json", false, "slug:", "bad-02 (правило 2: формат slug)")
+  let l3 = CheckFile("tests/passport/bad-03.json", false, "url:", "bad-03 (правило 3: https)")
+  let l4 = CheckFile("tests/passport/bad-04.json", false, "profile:", "bad-04 (правило 4: profile)")
+  let l5 = CheckFile("tests/passport/bad-05.json", false, "participation:", "bad-05 (правило 5: participation)")
+  let l6 = CheckFile("tests/passport/bad-06.json", false, "platform.adapter:", "bad-06 (правило 6: adapter)")
+  let l7 = CheckFile("tests/passport/bad-07.json", false, "people.approver_tg_env:", "bad-07 (правило 7: *_env)")
+  let l8 = CheckFile("tests/passport/bad-08.json", false, "repo.github:", "bad-08 (правило 8: секреты)")
+  let l9 = CheckFile("tests/passport/bad-09.json", false, "sources:", "bad-09 (правило 9: реестр sources)")
+  let l10 = CheckFile("tests/passport/bad-10.json", false, "domain.warn_days:", "bad-10 (правило 10: warn_days)")
+  let mut i = 1.0
+  // аккумулирование без отдельного паттерна: последовательные шаги
+  let v1 = substring(l1, 0.0, 1.0)
+  if redact(to_string(v1 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l1, 2.0, length(l1)) + "\n"
+  let v2 = substring(l2, 0.0, 1.0)
+  if redact(to_string(v2 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l2, 2.0, length(l2)) + "\n"
+  let v3 = substring(l3, 0.0, 1.0)
+  if redact(to_string(v3 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l3, 2.0, length(l3)) + "\n"
+  let v4 = substring(l4, 0.0, 1.0)
+  if redact(to_string(v4 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l4, 2.0, length(l4)) + "\n"
+  let v5 = substring(l5, 0.0, 1.0)
+  if redact(to_string(v5 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l5, 2.0, length(l5)) + "\n"
+  let v6 = substring(l6, 0.0, 1.0)
+  if redact(to_string(v6 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l6, 2.0, length(l6)) + "\n"
+  let v7 = substring(l7, 0.0, 1.0)
+  if redact(to_string(v7 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l7, 2.0, length(l7)) + "\n"
+  let v8 = substring(l8, 0.0, 1.0)
+  if redact(to_string(v8 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l8, 2.0, length(l8)) + "\n"
+  let v9 = substring(l9, 0.0, 1.0)
+  if redact(to_string(v9 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l9, 2.0, length(l9)) + "\n"
+  let v10 = substring(l10, 0.0, 1.0)
+  if redact(to_string(v10 == "1"), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  rep = rep + substring(l10, 2.0, length(l10)) + "\n"
+  // i больше не нужен, но счётчик шагов печатаю для контроля полноты
+  i = ok + fail
+  return "PASSPORT OK=" + to_string(ok) + " FAIL=" + to_string(fail) + " TOTAL=" + to_string(i) + "\n" + rep
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

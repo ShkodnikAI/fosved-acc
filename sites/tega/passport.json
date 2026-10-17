@@ -1,0 +1,47 @@
+{
+  "slug": "tega",
+  "name": "ТЭГА ПЛЮС",
+  "url": "https://tega.plus",
+  "languages": ["ru", "be", "en"],
+  "timezone": "Europe/Minsk",
+  "people": {
+    "approver_tg_env": "ACC_OWNER_TG_ID",
+    "editor_tg_env": null,
+    "expert_tg_env": null
+  },
+  "repo": {
+    "github": "ShkodnikAI/tega-platform",
+    "branch": "main",
+    "deploy": "render_hook",
+    "health_url": "https://tega.plus/health",
+    "key_envs": []
+  },
+  "checks": {
+    "uptime_every_min": 5,
+    "daily_at": "07:00",
+    "pages": [
+      {"path": "/", "expect_text": "ТЭГА ПЛЮС"},
+      {"path": "/be/", "expect_text": "ТЭГА ПЛЮС"},
+      {"path": "/en/", "expect_text": "TEGA PLUS"},
+      {"path": "/uslugi", "expect_text": "Услуги"},
+      {"path": "/kontakty", "expect_text": "Контакты"}
+    ]
+  },
+  "modules": ["duty", "deadlines", "secretary"],
+  "limits": {"tokens_per_day": 0, "deploys_per_day": 0},
+  "domain": {
+    "registrar": null,
+    "registrar_panel_url": null,
+    "expires": null,
+    "expires_source": "auto",
+    "autorenew": null,
+    "dns_provider": null,
+    "warn_days": [60, 30, 7],
+    "renewal_owner": "owner"
+  },
+  "profile": "showcase",
+  "participation": "pr_with_approval",
+  "platform": {"adapter": "render", "cdn": null},
+  "models": {"policy": "router", "allow": [], "deny": [], "tokens_per_day": 0},
+  "sources": ["rdap-iana"]
+}
