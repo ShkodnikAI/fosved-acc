@@ -1,0 +1,105 @@
+// Разрешённые домены исходящих запросов (наряд АСС-2.1, A.1; ТЗ §4.1, §12).
+//
+// AllowedDomains() — хосты url всех сайтов (зеркало
+// data/sites/<slug>/passport.json — как DutyReadPassport, serve-песочница
+// читает только data/) плюс domain записей зеркала реестра
+// data/registry/sources.json (COPY в образе, Dockerfile) со status: active
+// и terms_checked: true. Формат паспорта и реестра не меняется (ADR-0002).
+// Мёртвая рука (АСС-1.6) — исходящий запрос на сторожа: домен hc-ping.com
+// открыт штатным механизмом реестра (запись active + terms_checked).
+//
+// HttpAllowed(url) — схема только https, хост в списке ЦЕЛИКОМ; поддомены
+// не разрешаются автоматически (sub.tega.plus не открывается tega.plus).
+//
+// Тестовый флаг METALOGOS_HTTP_ALLOW_PRIVATE (=1) снимает проверку:
+// полигоны и serve-тест ходят на локальные фейк-сайты по http://127.0.0.1.
+// Семантика зеркальна SSRF-гарду Metalogos (тот же env, тот же допуск
+// «только в тестах» — запрет наряда: в проде флага нет). Чтение env вне
+// METALOGOS_ENV_ALLOWLIST в serve роняет маршрут громко (проба B.3) —
+// env_or под try: Err → "()" → флага нет, гард полный (fail-closed).
+// Данные решают только через inline-барьер redact(…, "hash_only") —
+// url из паспорта (read_file) недоверен (рецепт #546).
+
+pattern HostOf(url: String) -> String {
+  // хост из url: после "://" до первого "/" (с портом, если задан);
+  // "" — схемы "://" нет. split/срез — не решение if, барьер не нужен.
+  let parts = split(url, "//")
+  if to_float(to_string(len(parts))) < 2.0 {
+    return ""
+  }
+  let rest = to_string(get(parts, 1.0))
+  let segs = split(rest, "/")
+  return to_string(get(segs, 0.0))
+}
+
+pattern AllowedDomains() -> List {
+  // сборка через строку "h1\nh2\n..." + split (List + List в 0.32.0 нет)
+  let mut acc = ""
+  // 1) хосты url всех паспортов зеркала data/sites/
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let empty = redact(to_string(text == ""), "hash_only")
+    if empty != redact(to_string(true), "hash_only") {
+      let j = parse_json(text)
+      let url = to_string(j.url)
+      let h = HostOf(url)
+      let h_empty = redact(to_string(h == ""), "hash_only")
+      if h_empty != redact(to_string(true), "hash_only") {
+        acc = acc + h + "\n"
+      }
+    }
+  }
+  // 2) domain активных источников реестра (status: active + terms_checked: true)
+  let reg = read_file_or("data/registry/sources.json", "")
+  let reg_empty = redact(to_string(reg == ""), "hash_only")
+  if reg_empty != redact(to_string(true), "hash_only") {
+    let j = parse_json(reg)
+    each s in j {
+      let st = to_string(s.status)
+      let tc = to_string(s.terms_checked)
+      let dom = to_string(s.domain)
+      let is_active = redact(to_string(st == "active"), "hash_only")
+      let is_tc = redact(to_string(tc == "true"), "hash_only")
+      let dom_empty = redact(to_string(dom == ""), "hash_only")
+      if is_active == redact(to_string(true), "hash_only") {
+        if is_tc == redact(to_string(true), "hash_only") {
+          if dom_empty != redact(to_string(true), "hash_only") {
+            acc = acc + dom + "\n"
+          }
+        }
+      }
+    }
+  }
+  return split(acc, "\n")
+}
+
+pattern HttpAllowed(url: String) -> Bool {
+  // тестовый флаг — только в тестах; в serve вне allowlist try вернёт "()"
+  let flag = try env_or("METALOGOS_HTTP_ALLOW_PRIVATE", "")
+  let flag_s = to_string(flag)
+  let flag_on = redact(to_string(flag_s == "1"), "hash_only")
+  if flag_on == redact(to_string(true), "hash_only") {
+    return true
+  }
+  // схема: только https
+  let parts = split(url, "//")
+  let has_scheme = redact(to_string(to_float(to_string(len(parts))) >= 2.0 and to_string(get(parts, 0.0)) == "https:"), "hash_only")
+  if has_scheme != redact(to_string(true), "hash_only") {
+    return false
+  }
+  // хост в списке целиком
+  let host = HostOf(url)
+  let host_empty = redact(to_string(host == ""), "hash_only")
+  if host_empty == redact(to_string(true), "hash_only") {
+    return false
+  }
+  let mut found = false
+  each d in AllowedDomains() {
+    let hit = redact(to_string(to_string(d) == host), "hash_only")
+    if hit == redact(to_string(true), "hash_only") {
+      found = true
+    }
+  }
+  return found
+}

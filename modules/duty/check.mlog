@@ -15,23 +15,27 @@
 // Серия чистых проверок — kv-маркер (после рестарта серия начинается
 // заново — безвредно).
 //
-// Факты проб: http_get(url, map(), timeout) с URL из read_file проходит
-// mlog check (SSRF-гард — рантайм-барьер; METALOGOS_HTTP_ALLOW_PRIVATE
-// только в тестах); redirect policy none; 3xx возвращается как 2xx-тело;
-// grant_issue пишет запись в ledger (+1), INSERT по гранту — нет — один
-// грант на цикл. Решения по недоверенным данным (тело ответа, паспорт из
-// read_file) — только через inline-барьер redact(…, "hash_only") (#546).
+// Факты проб: GET-запросы с URL из read_file проходят mlog check (SSRF-гард —
+// рантайм-барьер; METALOGOS_HTTP_ALLOW_PRIVATE только в тестах); redirect policy
+// none; 3xx возвращается как 2xx-тело; grant_issue пишет запись в ledger
+// (+1), INSERT по гранту — нет — один грант на цикл. Решения по
+// недоверенным данным (тело ответа, паспорт из read_file) — только через
+// inline-барьер redact(…, "hash_only") (#546).
+// АСС-2.1 (наряд #14): все исходящие GET — только через http.SafeGet
+// (домен — из паспорта/активного источника реестра; отказ — журнал + громкая
+// ошибка до запроса).
 
 import core/store as st
 import modules/duty/incident as inc
 import modules/secretary/bot as sec_bot
+import core/http as http
 
 pattern DutyCheckPage(base: String, path: String, expect_text: String) -> String {
   // вердикт страницы: ok | down | no_text | slow. Один GET.
   let REF_TRUE = redact(to_string(true), "hash_only")
   let NONE = redact("()", "hash_only")
   let t0 = now()
-  let r = try http_get(base + path, 15.0)
+  let r = try http.SafeGet(base + path, 15.0)
   let ms = (now() - t0) * 1000.0
   let is_err = redact(to_string(r), "hash_only")
   if is_err == NONE {
@@ -53,7 +57,7 @@ pattern DutyHealthCheck(health_url: String) -> String {
   // health_url: Ok и тело содержит "ok" → ok, иначе "health"
   let REF_TRUE = redact(to_string(true), "hash_only")
   let NONE = redact("()", "hash_only")
-  let r = try http_get(health_url, 15.0)
+  let r = try http.SafeGet(health_url, 15.0)
   let is_err = redact(to_string(r), "hash_only")
   if is_err == NONE {
     return "health"

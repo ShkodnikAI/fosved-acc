@@ -42,11 +42,14 @@ python3 tests/serve/fake_site.py > "$FAKELOG" 2>&1 &
 FAKE=$!
 # allowlist — имена из runbook §2 (в проде ACC_HEARTBEAT_URL задан; здесь
 # значение пустое → heartbeat обязан вернуть skip, имя только разрешено).
+# METALOGOS_HTTP_ALLOW_PRIVATE в allowlist: HttpAllowed (core/allowlist.mlog,
+# АСС-2.1) читает тестовый флаг через env_or — в serve имена вне allowlist
+# недоступны; флаг снимает домен-гард для локального фейк-сайта (только тест).
 # Тестовый токен — литерал (прецедент: tests/polygon/secretary/run.sh).
 METALOGOS_SERVE_BACKEND="$BACKEND" \
 METALOGOS_ALLOW_EXEC=1 \
 METALOGOS_SERVE_ALLOW_EXEC=1 \
-METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_HEARTBEAT_URL" \
+METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_HEARTBEAT_URL,METALOGOS_HTTP_ALLOW_PRIVATE" \
 ACC_INTERNAL_TOKEN="poly-internal-token" \
 METALOGOS_HTTP_ALLOW_PRIVATE=1 \
 "$ML" serve app.mlog > "$LOG" 2>&1 &

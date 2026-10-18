@@ -1,0 +1,34 @@
+// SafeGet — единственный канал исходящих GET-запросов (наряд АСС-2.1, A.1).
+//
+// HttpAllowed = false → запрос НЕ выполняется: запись в журнал отказов
+// (Journal("journal", "http_denied", <хост>) — события фикстурной схемы
+// journal + grant-запись act=http_denied в подписанном ledger) и громкий
+// отказ (Loud-рецепт assert_eq, core/store.mlog). HttpAllowed = true →
+// http_get как обычно (SSRF-гард Metalogos остаётся — защита приватных
+// адресов, METALOGOS_HTTP_ALLOW_PRIVATE только в тестах).
+//
+// NB: Journal("*", …) в 0.32.0 не исполним — SiteDb валидирует slug
+// (^[a-z0-9-]{2,32}$) и громко отклоняет "*"; используется валидный
+// slug "journal" (каталог sites/journal/ создаётся деплоем из репо).
+//
+// http_post в core/ и modules/ не используется; при появлении — добавить
+// SafePost с той же проверкой (гард scripts/check_http.sh это ловит).
+
+import core/allowlist as aw
+import core/store as st
+import core/ledger as lg
+
+pattern SafeGet(url: String, timeout: Float) -> Any {
+  let ok = aw.HttpAllowed(url)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let allowed = redact(to_string(ok == true), "hash_only")
+  if allowed != REF_TRUE {
+    // журнал отказов до громкого отказа: SiteInit — CREATE IF NOT EXISTS
+    // таблиц схемы journal (Journal делает только ATTACH — store.mlog);
+    // идемпотентно (kv-маркер). Хост — вход, не решение if.
+    let _ = st.SiteInit("journal")
+    let _ = lg.Journal("journal", "http_denied", aw.HostOf(url))
+    let _ = st.Loud(allowed, "SafeGet: домен не разрешён (нужен https и хост из паспортов/активных источников реестра); host=")
+  }
+  return http_get(url, timeout)
+}

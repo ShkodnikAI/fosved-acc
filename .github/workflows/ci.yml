@@ -71,6 +71,10 @@ jobs:
         run: bash tests/polygon/duty/run.sh mlog | tee polygon.out | grep -q "POLYGON duty 5/5"
       - name: Гард exec (АСС-1.4 A.2) — exec только в modules/deadlines/run.mlog
         run: ./scripts/check_exec.sh
+      - name: Гард исходящих http (АСС-2.1 A.2) — запросы только через core/http.mlog
+        run: ./scripts/check_http.sh
+      - name: Тесты allowlist (АСС-2.1 A.3) — 6/6
+        run: bash tests/allowlist/run.sh mlog | tee polygon-allowlist.out | grep -q "POLYGON allowlist 6/6"
       - name: Полигон Дедлайнов (АСС-1.4 A.4) — 5/5
         run: bash tests/polygon/deadlines/run.sh mlog | tee polygon-deadlines.out | grep -q "POLYGON deadlines 5/5"
       - name: Полигон Секретаря (АСС-1.5 A.5) — 5/5

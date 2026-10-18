@@ -1,8 +1,8 @@
 // «Мёртвая рука» (наряд АСС-1.6, A.3; ТЗ §12, исследование C.4).
 //
 // DutyHeartbeat() — вызывается после КАЖДОГО успешного цикла Дежурного
-// по всем сайтам (DutyTickAll, schedule.mlog): http_get(env("ACC_
-// HEARTBEAT_URL")). Внешний сторож Healthchecks.io: нет пинга в срок —
+// по всем сайтам (DutyTickAll, schedule.mlog): GET на env("ACC_
+// HEARTBEAT_URL"). Внешний сторож Healthchecks.io: нет пинга в срок —
 // письмо/Telegram владельцу (ловит «жив, но расписание встало» — класс
 // отказа #520 FOSVED-office-v2).
 //
@@ -10,13 +10,18 @@
 // (kv-маркер потоколокален — не персист: на каждый рестарт — одна
 // строка, без спама каждую минуту).
 //
-// Факты (пробы сессии): env-URL в http_get проходит (private/trusted);
+// Факты (пробы сессии): env-URL в запросе проходит (private/trusted);
 // приватный адрес без METALOGOS_HTTP_ALLOW_PRIVATE — Err (SSRF-гард,
 // ожидаемо; в проде ACC_HEARTBEAT_URL — публичный Healthchecks.io).
 // heartbeat вызывается ТОЛЬКО после успешного цикла: если цикл упал —
 // пинга нет (структура кода: вызов — последняя строка DutyTickAll).
+// АСС-2.1 (наряд #14): запрос — через http.SafeGet; домен сторожа
+// (hc-ping.com) открыт записью реестра (active + terms_checked) —
+// штатный механизм открытия домена; тестовый флаг снимает проверку
+// в полигонах (http://127.0.0.1).
 
 import core/store as st
+import core/http as http
 
 pattern DutyHeartbeat() -> String {
   let REF_TRUE = redact(to_string(true), "hash_only")
@@ -32,7 +37,7 @@ pattern DutyHeartbeat() -> String {
     }
     return "skip"
   }
-  let r = try http_get(url, 10.0)
+  let r = try http.SafeGet(url, 10.0)
   let NONE = redact("()", "hash_only")
   let is_err = redact(to_string(r), "hash_only")
   if is_err == NONE {

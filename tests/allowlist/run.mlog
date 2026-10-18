@@ -1,0 +1,85 @@
+// Тесты allowlist (наряд АСС-2.1, A.3). Запуск: tests/allowlist/run.sh.
+// Ожидаемо: POLYGON allowlist 6/6.
+//
+//  1. https://tega.plus/ — разрешён (хост из паспорта зеркала data/sites);
+//  2. http://tega.plus/ — нет (схема — только https);
+//  3. https://evil.example/ — нет, плюс запись http_denied в журнале
+//     (схема journal, события events; SafeGet отказывает ДО запроса);
+//  4. https://sub.tega.plus/ — нет (поддомены не разрешаются автоматически);
+//  5. источник со status: disabled — не в списке (реестр готовит run.sh);
+//  6. добавили источник active с terms_checked: true — домен открылся
+//     без правки кода (write_file реестра из теста).
+//
+// Тесты 1, 2, 4, 5, 6 — чистая проверка HttpAllowed, без сети.
+// Тест 3 — отказ SafeGet до запроса: сеть не нужна.
+
+import core/allowlist as aw
+import core/http as http
+import core/store as st
+
+db { url: "sqlite::memory:" }
+
+pattern QueryDenied() -> Float {
+  // имя схемы — только через SiteDb (гард A.4.3 АСС-1.2)
+  let schema = st.SiteDb("journal")
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = 'http_denied'", [])
+  return to_float(to_string(n))
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── 1: https://tega.plus/ — разрешён ──
+  let t1 = redact(to_string(aw.HttpAllowed("https://tega.plus/")), "hash_only")
+  if t1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── 2: http://tega.plus/ — нет (схема) ──
+  let t2 = redact(to_string(aw.HttpAllowed("http://tega.plus/")), "hash_only")
+  if t2 != REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── 3: https://evil.example/ — отказ SafeGet до запроса + запись в журнале ──
+  let r3 = try http.SafeGet("https://evil.example/", 5.0)
+  let denied = redact(to_string(r3), "hash_only")
+  let NONE = redact("()", "hash_only")
+  let mut t3a = false
+  if denied == NONE {
+    // Err — громкий отказ пойман try → тест-наблюдение «отказ был»
+    t3a = true
+  }
+  let t3b = redact(to_string(QueryDenied() == 1.0), "hash_only")
+  let t3c = redact(to_string(aw.HttpAllowed("https://evil.example/")), "hash_only")
+  // t3c: домен не разрешён; t3a: SafeGet отказал; t3b: запись в журнале одна
+  let t3a_h = redact(to_string(t3a), "hash_only")
+  let mut s3 = 0.0
+  if t3a_h == REF_TRUE { s3 = s3 + 1.0 }
+  if t3b == REF_TRUE { s3 = s3 + 1.0 }
+  if t3c != REF_TRUE { s3 = s3 + 1.0 }
+  if redact(to_string(s3 == 3.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── 4: https://sub.tega.plus/ — нет (поддомен) ──
+  let t4 = redact(to_string(aw.HttpAllowed("https://sub.tega.plus/")), "hash_only")
+  if t4 != REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── 5: источник со status: disabled — не в списке ──
+  let t5 = redact(to_string(aw.HttpAllowed("https://disabled.example/")), "hash_only")
+  if t5 != REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── 6: добавили источник active + terms_checked — домен открылся без правки кода ──
+  let t6a = redact(to_string(aw.HttpAllowed("https://newsource.example/")), "hash_only")
+  let reg = read_file("data/registry/sources.json")
+  let j = parse_json(reg)
+  let _ = write_file("data/registry/sources.json.bak", reg)
+  let _ = write_file("data/registry/sources.json", "[{\"id\": \"x1\", \"kind\": \"registry\", \"domain\": \"newsource.example\", \"read_method\": \"http\", \"frequency\": \"weekly\", \"terms_checked\": true, \"status\": \"active\"}]")
+  let t6b = redact(to_string(aw.HttpAllowed("https://newsource.example/")), "hash_only")
+  let _ = write_file("data/registry/sources.json", reg)
+  let mut s6 = 0.0
+  if t6a != REF_TRUE { s6 = s6 + 1.0 }
+  if t6b == REF_TRUE { s6 = s6 + 1.0 }
+  if redact(to_string(s6 == 2.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── вердикт ──
+  let mut verdict = "POLYGON allowlist FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON allowlist 6/6"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}
