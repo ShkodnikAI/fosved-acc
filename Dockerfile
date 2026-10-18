@@ -46,4 +46,6 @@ ENV METALOGOS_ALLOW_EXEC=1 METALOGOS_SERVE_ALLOW_EXEC=1
 # Единственный задокументированный допуск — WARN csrf для /tg
 # (см. scripts/docker-audit.sh и комментарий middleware в app.mlog).
 RUN /app/scripts/docker-audit.sh
-CMD ["mlog", "serve", "app.mlog"]
+# АСС-1.6 A.3a: смонтированный диск закрывает /app/data — .keep и
+# data/sites создаём при старте контейнера, иначе /health → 503 degraded.
+CMD ["sh", "-c", "touch /app/data/.keep && mkdir -p /app/data/sites && exec mlog serve app.mlog"]

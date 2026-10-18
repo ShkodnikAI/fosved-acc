@@ -1,0 +1,42 @@
+// «Мёртвая рука» (наряд АСС-1.6, A.3; ТЗ §12, исследование C.4).
+//
+// DutyHeartbeat() — вызывается после КАЖДОГО успешного цикла Дежурного
+// по всем сайтам (DutyTickAll, schedule.mlog): http_get(env("ACC_
+// HEARTBEAT_URL")). Внешний сторож Healthchecks.io: нет пинга в срок —
+// письмо/Telegram владельцу (ловит «жив, но расписание встало» — класс
+// отказа #520 FOSVED-office-v2).
+//
+// Пустой env — пропуск; одна строка в лог при старте процесса
+// (kv-маркер потоколокален — не персист: на каждый рестарт — одна
+// строка, без спама каждую минуту).
+//
+// Факты (пробы сессии): env-URL в http_get проходит (private/trusted);
+// приватный адрес без METALOGOS_HTTP_ALLOW_PRIVATE — Err (SSRF-гард,
+// ожидаемо; в проде ACC_HEARTBEAT_URL — публичный Healthchecks.io).
+// heartbeat вызывается ТОЛЬКО после успешного цикла: если цикл упал —
+// пинга нет (структура кода: вызов — последняя строка DutyTickAll).
+
+import core/store as st
+
+pattern DutyHeartbeat() -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let url = env_or("ACC_HEARTBEAT_URL", "")
+  let empty = redact(to_string(url == ""), "hash_only")
+  if empty == REF_TRUE {
+    // одна строка в лог при старте процесса (kv не персист —
+    // потоколокален: на каждый рестарт — ровно одна строка)
+    let logged = redact(to_string(kv_exists("acc_hb_logged")), "hash_only")
+    if logged != REF_TRUE {
+      print("heartbeat: ACC_HEARTBEAT_URL не задан — мёртвая рука отключена (см. docs/runbook/deploy.md)")
+      let _ = kv_set("acc_hb_logged", "1")
+    }
+    return "skip"
+  }
+  let r = try http_get(url, 10.0)
+  let NONE = redact("()", "hash_only")
+  let is_err = redact(to_string(r), "hash_only")
+  if is_err == NONE {
+    return "heartbeat failed"
+  }
+  return "heartbeat ok"
+}

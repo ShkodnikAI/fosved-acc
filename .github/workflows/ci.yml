@@ -75,6 +75,8 @@ jobs:
         run: bash tests/polygon/deadlines/run.sh mlog | tee polygon-deadlines.out | grep -q "POLYGON deadlines 5/5"
       - name: Полигон Секретаря (АСС-1.5 A.5) — 5/5
         run: bash tests/polygon/secretary/run.sh mlog | tee polygon-secretary.out | grep -q "POLYGON secretary 5/5"
+      - name: Полигон «мёртвой руки» (АСС-1.6 A.3) — 3/3
+        run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
 
   checks:
     name: "Checks: скрипты сроков (юнит с моками сети + smoke)"
@@ -126,9 +128,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t fosved-acc .
-      - name: /health отвечает ok
+      - name: /health отвечает ok (том в /app/data — АСС-1.6 A.3a)
         run: |
-          docker run -d --name acc -p 10000:10000 fosved-acc
+          docker run -d --name acc -p 10000:10000 -v "$(mktemp -d):/app/data" fosved-acc
           for i in $(seq 1 60); do
             body=$(curl -s localhost:10000/health) && [ -n "$body" ] && break
             sleep 1
@@ -137,6 +139,32 @@ jobs:
           echo "::notice title=health::$body"
           docker logs acc | tail -20
           echo "$body" | grep -q '"status":"ok"'
+
+  deploy:
+    name: Deploy to Render (hook, ref=SHA)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [layout, mlog, store, checks, probes, secrets, docker]
+    steps:
+      - name: Деплой по хуку Render (параметр ref=SHA, документация Render — C.1)
+        env:
+          ACC_RENDER_DEPLOY_HOOK: ${{ secrets.ACC_RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "${ACC_RENDER_DEPLOY_HOOK}" ]; then
+            echo "deploy: секрет ACC_RENDER_DEPLOY_HOOK не задан — падаю (деплой только по хуку; урок FOSVED-office-v2 #524). Заведите секрет — docs/runbook/deploy.md, шаг 3."
+            exit 1
+          fi
+          # URL хука в лог не выводится: ответ только кодом (-o /dev/null)
+          code="$(curl -s -X POST "${ACC_RENDER_DEPLOY_HOOK}&ref=${GITHUB_SHA}" -o /dev/null -w "%{http_code}")"
+          if [ -z "${code}" ] || [ "${code}" = "000" ]; then
+            echo "deploy: хук недоступен (сеть) — падаю"
+            exit 1
+          fi
+          echo "deploy: хук ответил ${code}"
+          case "${code}" in
+            2*) echo "deploy: принят"; ;;
+            *) echo "deploy: хук ответил ${code} — падаю"; exit 1; ;;
+          esac
 
   research:
     name: Research АСС-0 (C.2) + АСС-1.4 A.5 (информационный, не блокирует мерж)

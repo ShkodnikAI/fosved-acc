@@ -17,6 +17,7 @@
 // bootstrap сразу после старта (как /schedules/bootstrap в офисе).
 
 import modules/duty/check as duty
+import modules/duty/heartbeat as hb
 
 pattern DutyReadPassport(slug: String) -> String {
   // текст паспорта сайта из ЗЕРКАЛА data/sites/<slug>/passport.json
@@ -71,7 +72,10 @@ pattern DutyTickAll() -> String {
       }
     }
   }
-  return "duty tick sites=" + to_string(done) + "\n" + rep
+  // «мёртвая рука» (АСС-1.6 A.3): пинг внешнего сторожа ПОСЛЕ каждого
+  // успешного цикла; если цикл упал раньше этой строки — пинга нет
+  let beat = hb.DutyHeartbeat()
+  return "duty tick sites=" + to_string(done) + "\n" + rep + beat + "\n"
 }
 
 pattern DutyBootstrap() -> String {

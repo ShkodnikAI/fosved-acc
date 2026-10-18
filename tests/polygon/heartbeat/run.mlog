@@ -1,0 +1,28 @@
+// Полигон «мёртвой руки» (наряд АСС-1.6, A.3). Запуск:
+// tests/polygon/heartbeat/run.sh — три прогона из отдельных деревьев:
+//   1) сайт ок + ACC_HEARTBEAT_URL задан → тик прошёл → hb_count=1
+//      (пинг есть после успешного цикла);
+//   2) битый паспорт (цикл падает) + ACC_HEARTBEAT_URL задан → тик не
+//      завершился → hb_count=0 (пинга нет при упавшем цикле);
+//   3) сайт ок, ACC_HEARTBEAT_URL пуст → hb_count=0 (пустой env —
+//      пропуск; одна строка в лог при старте — см. heartbeat.mlog).
+import modules/duty/schedule as sch
+
+db { url: "sqlite::memory:" }
+
+pattern Main1(x: String) -> String {
+  // try DutyTickAll: Err → "()", успех → строка отчёта тика
+  let r = try sch.DutyTickAll()
+  let NONE = redact("()", "hash_only")
+  let is_none = redact(to_string(r), "hash_only")
+  let mut tick = "ok"
+  if is_none == NONE {
+    tick = "err"
+  }
+  let cnt = read_file_or("hb_count", "0")
+  return "tick=" + tick + " hb_count=" + to_string(cnt)
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}
