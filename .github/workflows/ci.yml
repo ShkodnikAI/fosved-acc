@@ -46,7 +46,7 @@ jobs:
         run: mlog run tests/passport/run.mlog | tee /dev/stderr | grep -q "FAIL=0"
 
   store:
-    name: Store: изоляция, живучесть ATTACH, гард схем
+    name: "Store: изоляция, живучесть ATTACH, гард схем"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
