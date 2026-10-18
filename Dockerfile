@@ -42,6 +42,14 @@ EXPOSE 10000
 # действует METALOGOS_ALLOW_EXEC, в маршрутах serve — отдельный
 # METALOGOS_SERVE_ALLOW_EXEC (проба B.7).
 ENV METALOGOS_ALLOW_EXEC=1 METALOGOS_SERVE_ALLOW_EXEC=1
+# АСС-1.7 (наряд #24, A.1): движок serve — interpreter, до релиза Metalogos
+# с исправлением Metalogos-#1336. На движке по умолчанию (VM) цикл each
+# внутри тела if НЕ исполняется молча (проверено на бинаре v0.32.0,
+# sha256 dd8164b7…: if {each} → 0 итераций; each {if} → 3). Без этого
+# повторная проверка и открытие инцидента в DutyHandleVerdicts
+# (modules/duty/check.mlog) не выполняются — Дежурный молчит при сбое
+# сайта. Решение и условие возврата на VM — docs/adr/0003-serve-backend-interpreter.md.
+ENV METALOGOS_SERVE_BACKEND=interpreter
 # Проверка образа на сборке: синтаксис и аудит безопасности без ошибок.
 # Единственный задокументированный допуск — WARN csrf для /tg
 # (см. scripts/docker-audit.sh и комментарий middleware в app.mlog).
