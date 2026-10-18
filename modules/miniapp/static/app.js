@@ -66,6 +66,51 @@ var ACC = {
       "</div>";
   },
 
+  // ── АСС-2.4: вкладки «Модели» и «Источники» ──
+  regEntryCard: function (kind, e) {
+    var self = this;
+    var fields = "";
+    Object.keys(e).forEach(function (k) {
+      if (k === "id") { return; }
+      fields += '<div class="dl"><span class="muted">' + self.esc(k) + ':</span> ' + self.esc(e[k]) + '</div>';
+    });
+    var st = e.status === "active" ? "green" : "gray";
+    var ops = "";
+    if (e.status === "active") {
+      ops = '<button class="tab op" data-kind="' + this.esc(kind) + '" data-op="disable" data-id="' + this.esc(e.id) + '">Выключить</button>';
+    } else {
+      ops = '<button class="tab op" data-kind="' + this.esc(kind) + '" data-op="enable" data-id="' + this.esc(e.id) + '">Включить</button>';
+    }
+    ops += '<button class="tab op" data-kind="' + this.esc(kind) + '" data-op="delete" data-id="' + this.esc(e.id) + '">Удалить</button>';
+    return '<div class="card reg-card">' +
+      '<span class="dot ' + st + '"></span>' +
+      '<div class="site-name">' + this.esc(e.id) + '</div>' + fields +
+      '<div class="dl"><span class="muted">status:</span> ' + this.esc(e.status) + '</div>' +
+      '<div class="ops">' + ops + '</div>' +
+      '<div class="confirm hidden">Удалить/изменить запись? <button class="tab op-go" data-kind="' + this.esc(kind) + '" data-op="" data-id="' + this.esc(e.id) + '">Подтвердить</button> <button class="tab op-no">Отмена</button></div>' +
+      '</div>';
+  },
+
+  regAddForm: function (kind) {
+    var fields = kind === "sources"
+      ? '<input name="id" placeholder="id (a-z0-9-, 2-40)"><input name="domain" placeholder="домен (без схемы/пути)"><input name="kind" placeholder="kind (registry|watchdog|…)"><input name="read_method" placeholder="read_method (http|whois|…)"><input name="frequency" placeholder="frequency (weekly|on-demand|…)">'
+      : '<input name="id" placeholder="id (a-z0-9-, 2-40)"><input name="name" placeholder="название"><input name="provider" placeholder="провайдер"><input name="model" placeholder="модель"><input name="key_env" placeholder="key_env — ИМЯ переменной (ABC_DEF)">';
+    return '<div class="card reg-add" data-kind="' + this.esc(kind) + '">' +
+      '<div class="site-name">Добавить запись</div>' + fields +
+      '<input name="terms" placeholder="terms_checked: да/нет" value="да">' +
+      '<button class="tab op-add" data-kind="' + this.esc(kind) + '">Отправить PR</button>' +
+      '<div class="msg pr-result"></div>' +
+      '</div>';
+  },
+
+  renderRegistry: function (kind, list) {
+    var self = this;
+    if (!list || !list.length) {
+      return '<div class="empty">Записей нет</div>' + this.regAddForm(kind);
+    }
+    return list.map(function (e) { return self.regEntryCard(kind, e); }).join("") + this.regAddForm(kind);
+  },
+
   renderSites: function (list) {
     if (!list || !list.length) {
       return '<div class="empty">Сайтов на обслуживании нет</div>' +
@@ -103,6 +148,73 @@ if (typeof document !== "undefined") {
 
     var TITLES = { sites: "Сайты", models: "Модели", sources: "Источники" };
 
+    function wire(view) {
+      // двухшаговое подтверждение операций и отправка формы
+      Array.prototype.forEach.call(view.querySelectorAll(".op"), function (b) {
+        b.addEventListener("click", function () {
+          var card = b.closest(".reg-card") || b.closest(".reg-add");
+          var conf = card && card.querySelector(".confirm");
+          if (conf) {
+            var go = conf.querySelector(".op-go");
+            go.setAttribute("data-op", b.getAttribute("data-op"));
+            go.setAttribute("data-id", b.getAttribute("data-id"));
+            conf.classList.remove("hidden");
+          }
+        });
+      });
+      Array.prototype.forEach.call(view.querySelectorAll(".op-no"), function (b) {
+        b.addEventListener("click", function () {
+          b.closest(".confirm").classList.add("hidden");
+        });
+      });
+      function postReg(kind, payload, out) {
+        fetch("/api/registry/" + kind, {
+          method: "POST",
+          headers: { "X-ACC-Session": token, "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(function (r) {
+          return r.json().then(function (j) { out(r.status, j); });
+        }).catch(function () { out(0, { error: "сеть" }); });
+      }
+      Array.prototype.forEach.call(view.querySelectorAll(".op-go"), function (b) {
+        b.addEventListener("click", function () {
+          var kind = b.getAttribute("data-kind");
+          var op = b.getAttribute("data-op");
+          var id = b.getAttribute("data-id");
+          postReg(kind, { op: op, id: id }, function (status, j) {
+            if (status === 200 && j.pr_url) {
+              view.querySelector(".pr-result") && (view.querySelector(".pr-result").innerHTML = 'Создан PR: <a href="' + ACC.esc(j.pr_url) + '">' + ACC.esc(j.pr_url) + "</a>");
+            } else {
+              view.querySelector(".pr-result") && (view.querySelector(".pr-result").textContent = "Ошибка: " + (j && j.error || status));
+            }
+          });
+        });
+      });
+      Array.prototype.forEach.call(view.querySelectorAll(".op-add"), function (b) {
+        b.addEventListener("click", function () {
+          var card = b.closest(".reg-add");
+          var kind = b.getAttribute("data-kind");
+          var entry = { status: "active" };
+          Array.prototype.forEach.call(card.querySelectorAll("input"), function (inp) {
+            if (!inp.name) { return; }
+            if (inp.name === "terms") {
+              entry.terms_checked = /^да|yes|true$/i.test(inp.value);
+            } else {
+              entry[inp.name] = inp.value;
+            }
+          });
+          var out = card.querySelector(".pr-result");
+          postReg(kind, { op: "add", entry: entry }, function (status, j) {
+            if (status === 200 && j.pr_url) {
+              out.innerHTML = 'Создан PR: <a href="' + ACC.esc(j.pr_url) + '">' + ACC.esc(j.pr_url) + "</a>";
+            } else {
+              out.textContent = "Ошибка: " + (j && j.error || status);
+            }
+          });
+        });
+      });
+    }
+
     function render(tab) {
       if (tab === "sites") {
         view.innerHTML = '<p class="msg">Загрузка…</p>';
@@ -111,6 +223,16 @@ if (typeof document !== "undefined") {
             view.innerHTML = ACC.renderSites(list);
             var btn = document.getElementById("refresh");
             if (btn) { btn.addEventListener("click", function () { render("sites"); }); }
+          }
+        });
+        return;
+      }
+      if (tab === "models" || tab === "sources") {
+        view.innerHTML = '<p class="msg">Загрузка…</p>';
+        api("/api/registry/" + tab, function (status, list) {
+          if (status === 200) {
+            view.innerHTML = ACC.renderRegistry(tab, list);
+            wire(view);
           }
         });
         return;

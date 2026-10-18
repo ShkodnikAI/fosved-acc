@@ -1,29 +1,6 @@
 [
-  {
-    "id": "rdap-iana",
-    "kind": "registry",
-    "domain": "data.iana.org",
-    "read_method": "http",
-    "frequency": "weekly",
-    "terms_checked": true,
-    "status": "active"
-  },
-  {
-    "id": "whois-cctld-by",
-    "kind": "registry",
-    "domain": "whois.cctld.by",
-    "read_method": "whois",
-    "frequency": "weekly",
-    "terms_checked": true,
-    "status": "active"
-  },
-  {
-    "id": "healthchecks-hc-ping",
-    "kind": "watchdog",
-    "domain": "hc-ping.com",
-    "read_method": "http",
-    "frequency": "per-cycle",
-    "terms_checked": true,
-    "status": "active"
-  }
+{"domain":"data.iana.org","frequency":"weekly","id":"rdap-iana","kind":"registry","read_method":"http","status":"active","terms_checked":true},
+{"domain":"whois.cctld.by","frequency":"weekly","id":"whois-cctld-by","kind":"registry","read_method":"whois","status":"active","terms_checked":true},
+{"domain":"hc-ping.com","frequency":"per-cycle","id":"healthchecks-hc-ping","kind":"watchdog","read_method":"http","status":"active","terms_checked":true},
+{"domain":"api.github.com","frequency":"on-demand","id":"github-api","kind":"registry","read_method":"http","status":"active","terms_checked":true}
 ]

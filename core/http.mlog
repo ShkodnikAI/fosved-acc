@@ -32,3 +32,30 @@ pattern SafeGet(url: String, timeout: Float) -> Any {
   }
   return http_get(url, timeout)
 }
+
+pattern SafeGetH(url: String, headers: Any) -> Any {
+  // GET с заголовками (Struct) — для GitHub API (АСС-2.4); 30 s default
+  let ok = aw.HttpAllowed(url)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let allowed = redact(to_string(ok == true), "hash_only")
+  if allowed != REF_TRUE {
+    let _ = st.SiteInit("journal")
+    let _ = lg.Journal("journal", "http_denied", aw.HostOf(url))
+    let _ = st.Loud(allowed, "SafeGetH: домен не разрешён (нужен https и хост из паспортов/активных источников реестра); host=")
+  }
+  return http_get(url, headers)
+}
+
+pattern SafePost(url: String, body: String, headers: Any) -> Any {
+  // POST с JSON-телом и заголовками (Struct) — GitHub API (АСС-2.4, A.2);
+  // Content-Type application/json — дефолт http_post (REFERENCE)
+  let ok = aw.HttpAllowed(url)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let allowed = redact(to_string(ok == true), "hash_only")
+  if allowed != REF_TRUE {
+    let _ = st.SiteInit("journal")
+    let _ = lg.Journal("journal", "http_denied", aw.HostOf(url))
+    let _ = st.Loud(allowed, "SafePost: домен не разрешён (нужен https и хост из паспортов/активных источников реестра); host=")
+  }
+  return http_post(url, body, "application/json", headers)
+}

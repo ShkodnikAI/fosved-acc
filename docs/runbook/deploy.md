@@ -35,7 +35,9 @@
 | `ACC_HEARTBEAT_URL` | полный ping-адрес Healthchecks.io из шага 4 |
 | `ACC_SESSION_SECRET` | случайная строка (например, `openssl rand -hex 32`) — секрет подписанных ссылок Mini App (АСС-2.2, `/app`) |
 | `ACC_PUBLIC_URL` | публичный https-адрес сервиса (например, `https://<имя-сервиса>.onrender.com`) — база кнопки `/app` (АСС-2.2) |
-| `METALOGOS_ENV_ALLOWLIST` | точный список: `ACC_INTERNAL_TOKEN,ACC_OWNER_TG_ID,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_HEARTBEAT_URL,TELEGRAM_BOT_TOKEN_ACC,ACC_SESSION_SECRET,ACC_PUBLIC_URL` |
+| `ACC_GITHUB_TOKEN` | fine-grained GitHub token **только на `ShkodnikAI/fosved-acc`** (Contents: Read and write, Pull requests: Read and write, срок 90 дней) — изменения реестров через PR (АСС-2.4); в чат не присылать |
+| `ACC_GITHUB_API_BASE` | не задавать (дефолт `https://api.github.com`; переопределяется только в тестах) |
+| `METALOGOS_ENV_ALLOWLIST` | точный список: `ACC_INTERNAL_TOKEN,ACC_OWNER_TG_ID,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_HEARTBEAT_URL,TELEGRAM_BOT_TOKEN_ACC,ACC_SESSION_SECRET,ACC_PUBLIC_URL,ACC_GITHUB_TOKEN` |
 
 ## 3. Deploy Hook → секрет GitHub
 
