@@ -1,0 +1,96 @@
+// Тест изоляции сайтов и журнала (наряд АСС-1.2, A.4; A.3 — подделка).
+//
+// Запуск из корня репо:
+//   mkdir -p data/sites/aa data/sites/bb
+//   mlog run tests/store/isolation.mlog 2> isolation.err
+// Ожидаемо: ISOLATION OK=9 FAIL=0.
+// (файлы журнала — в корне CWD: песочница ledger_export запрещает
+// подкаталоги; *.jsonl в .gitignore)
+// В stderr при этом по одной громкой ошибке «SiteDb: slug …» на каждый
+// плохой slug (../a, A, a;DROP) — их ловит try, это ожидаемое поведение;
+// CI-шаг проверяет наличие этих сообщений в stderr (мутация: убрать
+// regex-проверку в SiteDb → сообщений нет, шаг красный).
+//
+// Фикстурные слаги — «aa»/«bb» (не «a»/«b»): regex наряда
+// ^[a-z0-9-]{2,32}$ требует минимум 2 символа.
+//
+// Проверяемые правила (счётчик OK):
+//  1. запись в health_checks сайта aa видна через схему aa;
+//  2. код со схемой bb ту строку не видит (изоляция);
+//  3–5. SiteDb("../a"), SiteDb("A"), SiteDb("a;DROP") — громкая ошибка;
+//  6. Journal пишет строку в events сайта;
+//  7. подписанный журнал непуст (запись от гранта Journal);
+//  8. целый экспорт журнала проходит ledger_verify (ok=true);
+//  9. экспорт с подменённой строкой не проходит (ok=false).
+//
+// Плохие slug (../a, A, a;DROP) проверяются тем же прогоном: try ловит
+// громкую ошибку SiteDb, тест считает «ошибка случилась» за OK.
+
+import core/store as st
+import core/ledger as lg
+
+db { url: "sqlite::memory:" }
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── A.4.1: два сайта, запись в aa, bb не видит ──
+  let sa = st.SiteDb("aa")
+  let _ = st.SiteInit("aa")
+  let sb = st.SiteDb("bb")
+  let _ = st.SiteInit("bb")
+  let ga = grant_issue("db:insert:" + sa + ".health_checks", 60, "unlimited")
+  // маркер прогона — тест идемпотентен при перезапусках (файлы фикстур живут)
+  let marker = "probe-" + to_string(now())
+  let _ = db_execute_with_grant(ga, "INSERT INTO " + sa + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), marker, 200.0, 12.0, 1.0, ""])
+  let ca = query_scalar("SELECT COUNT(*) FROM " + sa + ".health_checks WHERE url = ?1", [marker])
+  let cb = query_scalar("SELECT COUNT(*) FROM " + sb + ".health_checks WHERE url = ?1", [marker])
+  // 1: a видит ровно свою запись
+  let vis = redact(to_string(to_string(ca) == "1"), "hash_only")
+  if vis == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // 2: b не видит чужих записей
+  let iso = redact(to_string(to_string(cb) == "0"), "hash_only")
+  if iso == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── A.4.2: плохие slug — громкая ошибка (сообщение в stderr) ──
+  let e1 = try st.SiteDb("../a")
+  let e2 = try st.SiteDb("A")
+  let e3 = try st.SiteDb("a;DROP")
+  let r1 = redact(to_string(to_string(e1) == "()"), "hash_only")
+  if r1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let r2 = redact(to_string(to_string(e2) == "()"), "hash_only")
+  if r2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let r3 = redact(to_string(to_string(e3) == "()"), "hash_only")
+  if r3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── A.3: Journal — строка в events + запись в подписанный журнал ──
+  let _ = lg.Journal("aa", "isolation", "тест изоляции: запись в aa")
+  let ce = query_scalar("SELECT COUNT(*) FROM " + sa + ".events", [])
+  let ev = redact(to_string(ce >= 1.0), "hash_only")
+  if ev == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n = ledger_count()
+  let led = redact(to_string(n >= 1.0), "hash_only")
+  if led == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── A.3: подделка журнала обнаруживается (рецепт пробы B.6) ──
+  // NB: ledger_export возвращает абсолютный safe-path — в ledger_verify
+  // передаём тот же путь ЛИТЕРАЛОМ (песочница запрещает абсолютные строки;
+  // так же устроена проба B.6).
+  let _ = ledger_export("ledger-export.jsonl")
+  let v = ledger_verify("ledger-export.jsonl")
+  let good = redact(to_string(to_string(v.ok) == "true"), "hash_only")
+  if good == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let raw = read_file("ledger-export.jsonl")
+  let lines = split(raw, "\n")
+  let first = to_string(get(lines, 0.0))
+  let tampered_first = replace(first, "\"scope\"", "\"scopX\"")
+  let tampered = replace(raw, first, tampered_first)
+  if redact(tampered, "hash_only") == redact(raw, "hash_only") { fail = fail + 1.0 }
+  let _ = write_file("ledger-tampered.jsonl", tampered)
+  let v2 = ledger_verify("ledger-tampered.jsonl")
+  let bad = redact(to_string(to_string(v2.ok) == "false"), "hash_only")
+  if bad == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  return "ISOLATION OK=" + to_string(ok) + " FAIL=" + to_string(fail)
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

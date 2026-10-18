@@ -45,6 +45,29 @@ jobs:
       - name: Passport validation
         run: mlog run tests/passport/run.mlog | tee /dev/stderr | grep -q "FAIL=0"
 
+  store:
+    name: Store: изоляция, живучесть ATTACH, гард схем
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mlog (pinned SHA256)
+        run: |
+          curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
+          echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
+          chmod +x /usr/local/bin/mlog
+      - name: Изоляция сайтов и журнала (A.4, A.3)
+        run: |
+          mkdir -p data/sites/aa data/sites/bb
+          set -o pipefail
+          mlog run tests/store/isolation.mlog 2> isolation.err | tee isolation.out | grep -q "ISOLATION OK=9 FAIL=0"
+          # громкая ошибка regex на каждый плохой slug (../a, A, a;DROP);
+          # мутация (снять regex в SiteDb) делает этот grep красным
+          grep -c "SiteDb: slug" isolation.err | grep -q "^3$"
+      - name: Гард прямых имён схем (A.4.3)
+        run: ./scripts/check_store_access.sh
+      - name: Живучесть ATTACH при serve (A.2) — 50 посл. + 20 парал.
+        run: bash tests/store/serve_attach.sh mlog
+
   probes:
     name: Probes Metalogos (АСС-0, блок B)
     runs-on: ubuntu-24.04

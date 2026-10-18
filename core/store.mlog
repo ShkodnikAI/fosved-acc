@@ -1,0 +1,70 @@
+// Хранилище сайта (наряд АСС-1.2, A.1; ТЗ §4 — изоляция, §13 — таблицы).
+// Один файл SQLite на сайт: data/sites/<slug>/site.db.
+//
+// Факты (пробы 0.32.0, см. отчёт наряда):
+//  - подключение к базе в serve свежее на каждый запрос (проба A.2:
+//    kv-маркер жил, подключение — нет), поэтому SiteDb подключает (ATTACH)
+//    при каждом использовании; повторный ATTACH в рамках одного запроса
+//    даёт «already in use» — ошибка глотается, дальнейшая проба решает;
+//  - write_file/ATTACH каталоги не создают: каталог data/sites/<slug>/
+//    создаётся деплоем/шагом CI (mkdir); его отсутствие — громкая ошибка;
+//  - SQL_DYNAMIC (компайл-ошибка) запрещает не-литеральный SQL в
+//    query/db_execute; санкционированный канал записи —
+//    db_execute_with_grant (грант-алгебра ограничивает op:table в
+//    рантайме), чтение — query_scalar/query_row;
+//  - taint: slug из сети/read_file недоверен; решения — только через
+//    inline-барьер redact(…, "hash_only") (рецепт #546 FOSVED-office-v2).
+//
+// Все запросы к данным сайта — только через имя схемы из SiteDb.
+// Прямые имена схем в других файлах запрещены (гард A.4.3:
+// scripts/check_store_access.sh).
+//
+// Громкая ошибка: require() в 0.32.0 — ролевой гейт (проверка роли
+// пользователя сервера), а не assert; роль-независимый способ упасть —
+// assert_eq (Err при неравенстве). Loud(cond_hash, what) поднимает ошибку
+// с человекочитаемым префиксом what: cond_hash — результат
+// redact(to_string(<предикат>), "hash_only").
+
+pattern Loud(cond_hash: String, what: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  assert_eq(what + cond_hash, what + REF_TRUE)
+  return "ok"
+}
+
+pattern SiteDb(slug: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 1. slug: ^[a-z0-9-]{2,32}$ — иначе громкая ошибка (Loud/assert_eq).
+  //    Точка входа для traversal: "../a", "A", "a;DROP" здесь отбрасываются.
+  let slug_ok = redact(to_string(regex_match("^[a-z0-9-]{2,32}$", slug)), "hash_only")
+  let _ = Loud(slug_ok, "SiteDb: slug должен состоять из строчных букв, цифр и дефиса, 2–32 символа; hash=")
+  // 2. имя схемы: site_<slug с заменой - на _>
+  let schema = "site_" + replace(slug, "-", "_")
+  // 3. ATTACH при каждом использовании (подключение живёт один запрос).
+  //    «already in use» в рамках того же запроса — норма: глотается,
+  //    доступность схемы проверяет проба ниже.
+  let g = grant_issue("db:attach:" + schema, 60, "unlimited")
+  let _ = try db_execute_with_grant(g, "ATTACH DATABASE 'data/sites/" + slug + "/site.db' AS " + schema, [])
+  // 4. проба схемы на текущем подключении; провал — громкая ошибка
+  //    (типичный случай: нет каталога data/sites/<slug>/)
+  let probe = try query_scalar("SELECT COUNT(*) FROM " + schema + ".sqlite_master", [])
+  let probe_ok = redact(to_string(to_string(probe) != "()"), "hash_only")
+  let _ = Loud(probe_ok, "SiteDb: схема сайта не доступна — проверьте каталог data/sites/<slug>/ и права на файл; hash=")
+  return schema
+}
+
+pattern SiteInit(slug: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let schema = SiteDb(slug)
+  // Таблицы живут в файле сайта и переживают запросы; маркер «инициализировано»
+  // — на процесс (kv общий между запросами). После рестарта маркер пуст —
+  // CREATE IF NOT EXISTS отрабатывает заново безвредно.
+  let inited = redact(to_string(kv_exists("acc_inited_" + schema)), "hash_only")
+  if inited == REF_TRUE { return "ok" }
+  let g = grant_issue("db:insert:" + schema + ".tables", 60, "unlimited")
+  let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS " + schema + ".health_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, url TEXT, status INTEGER, ms REAL, text_ok INTEGER, error TEXT)", [])
+  let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS " + schema + ".deadlines (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, subject TEXT, expires TEXT, source TEXT, checked_ts REAL)", [])
+  let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS " + schema + ".incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, opened_ts REAL, closed_ts REAL, kind TEXT, summary TEXT, notified_ts REAL)", [])
+  let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS " + schema + ".events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, text TEXT, sent_ts REAL)", [])
+  let _ = kv_set("acc_inited_" + schema, "1")
+  return "ok"
+}
