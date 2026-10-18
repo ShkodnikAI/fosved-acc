@@ -35,6 +35,17 @@ cp modules/miniapp/static/app.html modules/miniapp/static/app.js modules/miniapp
 python3 tests/intake/fake_intake_site.py > /tmp/acc_intake_fake.log 2>&1 &
 FAKE=$!
 
+# ── юниты (тесты 1–5, run-режим)
+METALOGOS_ENV_ALLOWLIST="ACC_SESSION_SECRET" \
+ACC_SESSION_SECRET="acc-intake-sess" \
+METALOGOS_ALLOW_EXEC=1 \
+METALOGOS_HTTP_ALLOW_PRIVATE=1 \
+"$ML" run tests/intake/run.mlog > /tmp/intake-unit.out 2>/tmp/intake-unit.err
+UNIT_RC=$?
+grep -E "POLYGON" /tmp/intake-unit.out
+[ "$UNIT_RC" = "0" ] && grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
+chk "$?" "юниты POLYGON intake 7/7 (тесты 1–5)"
+
 METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_SESSION_SECRET,ACC_PUBLIC_URL,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_OWNER_TG_ID,METALOGOS_HTTP_ALLOW_PRIVATE" \
 ACC_SESSION_SECRET="acc-intake-sess" \
 ACC_PUBLIC_URL="https://acc-test.example" \
@@ -63,17 +74,6 @@ done
 
 ok=0; fail=0
 chk() { if [ "$1" = "0" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi }
-
-# ── юниты (тесты 1–5, run-режим)
-METALOGOS_ENV_ALLOWLIST="ACC_SESSION_SECRET" \
-ACC_SESSION_SECRET="acc-intake-sess" \
-METALOGOS_ALLOW_EXEC=1 \
-METALOGOS_HTTP_ALLOW_PRIVATE=1 \
-"$ML" run tests/intake/run.mlog > /tmp/intake-unit.out 2>/tmp/intake-unit.err
-UNIT_RC=$?
-grep -E "POLYGON" /tmp/intake-unit.out
-[ "$UNIT_RC" = "0" ] && grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
-chk "$?" "юниты POLYGON intake 7/7 (тесты 1–5)"
 
 # ── VM-проба: команда бота через POST /tg (бот-путь, serve/VM)
 TG_BODY="{\"update_id\":1,\"message\":{\"message_id\":1,\"from\":{\"id\":$OWNER_TG},\"text\":\"прими сайт http://127.0.0.1:18488\"}}"

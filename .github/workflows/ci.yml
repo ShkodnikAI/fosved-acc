@@ -87,6 +87,8 @@ jobs:
         run: bash tests/registry/check.sh mlog
       - name: Реестры через Mini App (АСС-2.4 A.3) — 5/5, мок GitHub
         run: bash tests/registryapi/run.sh mlog | tee registryapi.out | grep -q "REGISTRYAPI OK 5/5"
+      - name: Приём сайта — разведка (АСС-2.5 A.3) — 7/7 + VM-проба
+        run: bash tests/intake/run.sh mlog | tee intake.out | grep -q "INTAKE OK"
 
   serve:
     name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"
