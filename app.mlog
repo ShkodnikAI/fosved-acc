@@ -18,6 +18,12 @@ memory { persist: "data/memory.db" }
 mlogserver {
   port: 10000
   host: "0.0.0.0"
+  // NB: csrf middleware НЕ включён — он 403-ит Telegram-webhook
+  // (server-to-server, cookie/csrf-токена нет; проба АСС-1.5:
+  // "403 Forbidden: CSRF token validation failed"). Аутентификация /tg —
+  // секрет-заголовок через ct_eq (A.1) — эквивалент цели csrf для
+  // non-browser клиента. WARN аудита "POST routes without CSRF
+  // middleware" — задокументированный допуск (scripts/docker-audit.sh).
   middleware: [rate_limit, security_headers]
 
   route "/health" method=GET {
