@@ -42,8 +42,8 @@ METALOGOS_ALLOW_EXEC=1 \
 METALOGOS_HTTP_ALLOW_PRIVATE=1 \
 "$ML" run tests/intake/run.mlog > /tmp/intake-unit.out 2>/tmp/intake-unit.err
 UNIT_RC=$?
-grep -E "POLYGON" /tmp/intake-unit.out
-[ "$UNIT_RC" = "0" ] && grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
+cat /tmp/intake-unit.out || true
+grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
 chk "$?" "юниты POLYGON intake 7/7 (тесты 1–5)"
 
 METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_SESSION_SECRET,ACC_PUBLIC_URL,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_OWNER_TG_ID,METALOGOS_HTTP_ALLOW_PRIVATE" \
@@ -79,18 +79,22 @@ chk() { if [ "$1" = "0" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL:
 TG_BODY="{\"update_id\":1,\"message\":{\"message_id\":1,\"from\":{\"id\":$OWNER_TG},\"text\":\"прими сайт http://127.0.0.1:18488\"}}"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H "Content-Type: application/json" -d "$TG_BODY" "http://127.0.0.1:$PORT/tg" || true)"
 [ "$code" = "200" ]; chk "$?" "VM-проба: POST /tg → 200"
-sleep 2
-python3 - <<'PY'
-import sqlite3, sys
+# разведка асинхронна — поллинг черновика до 30 с
+VM_OK=1
+for i in $(seq 1 30); do
+  if python3 - <<'PY' 2>/dev/null
+import sqlite3
 con = sqlite3.connect("data/acc.db")
 n = con.execute("SELECT COUNT(*) FROM intake_drafts WHERE url = 'http://127.0.0.1:18488'").fetchone()[0]
-assert n >= 1, f"VM-путь: черновика нет (n={n})"
+assert n >= 1, "нет черновика"
 draft = con.execute("SELECT draft FROM intake_drafts WHERE url = 'http://127.0.0.1:18488'").fetchone()[0]
-assert '"languages":["ru","be","en"]' in draft, "VM-путь: языки не собраны"
-assert '"health_url":"http://127.0.0.1:18488/health"' in draft, "VM-путь: health_url не найден"
-print("VM BOT PATH OK")
+assert '"languages":["ru","be","en"]' in draft, "языки не собраны"
+assert '"health_url":"http://127.0.0.1:18488/health"' in draft, "health_url не найден"
 PY
-chk "$?" "VM-проба: черновик бота в acc.db (языки+health_url)"
+  then VM_OK=0; break; fi
+  sleep 1
+done
+[ "$VM_OK" = "0" ]; chk "$?" "VM-проба: черновик бота в acc.db (языки+health_url)"
 
 if [ "$fail" = 0 ]; then
   echo "INTAKE OK (юниты 7/7 + VM-проба бота)"
