@@ -1,0 +1,221 @@
+// Дежурный — проверка страниц, подтверждение, цикл (наряд АСС-1.3, A.1+A.2).
+//
+// DutyCheck(slug) — точка входа (A.1): паспорт из sites/<slug>/passport.json.
+// DutyCheckPassport(slug, passport_text) — один цикл:
+//   1. каждая страница из checks.pages: GET url+path (таймаут 15 с), запись
+//      в health_checks (status, ms, text_ok, error);
+//   2. сбой страницы: транспортная ошибка/статус не 2xx (http_get Err —
+//      0.32.0 не отдаёт код отдельно: 4xx/5xx и транспорт приходят Err с
+//      текстом), нет контрольного текста, ответ > 10 с;
+//   3. отдельно health_url: Ok и тело содержит "ok";
+//   4. подтверждение (A.2): сбой вида без открытого инцидента → sleep(60) →
+//      повторная проверка ТОЛЬКО упавших; повторился → инцидент
+//      (incident.mlog DutyInsertIncident: incidents + Journal);
+//   5. закрытие: две подряд чистые проверки вида → DutyCloseIncident.
+// Серия чистых проверок — kv-маркер (после рестарта серия начинается
+// заново — безвредно).
+//
+// Факты проб: http_get(url, map(), timeout) с URL из read_file проходит
+// mlog check (SSRF-гард — рантайм-барьер; METALOGOS_HTTP_ALLOW_PRIVATE
+// только в тестах); redirect policy none; 3xx возвращается как 2xx-тело;
+// grant_issue пишет запись в ledger (+1), INSERT по гранту — нет — один
+// грант на цикл. Решения по недоверенным данным (тело ответа, паспорт из
+// read_file) — только через inline-барьер redact(…, "hash_only") (#546).
+
+import core/store as st
+import modules/duty/incident as inc
+
+pattern DutyCheckPage(base: String, path: String, expect_text: String) -> String {
+  // вердикт страницы: ok | down | no_text | slow. Один GET.
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let NONE = redact("()", "hash_only")
+  let t0 = now()
+  let r = try http_get(base + path, 15.0)
+  let ms = (now() - t0) * 1000.0
+  let is_err = redact(to_string(r), "hash_only")
+  if is_err == NONE {
+    return "down"
+  }
+  let body = to_string(r)
+  let ms_ok = redact(to_string(ms <= 10000.0), "hash_only")
+  if ms_ok != REF_TRUE {
+    return "slow"
+  }
+  let text_ok = redact(to_string(contains(body, expect_text)), "hash_only")
+  if text_ok == REF_TRUE {
+    return "ok"
+  }
+  return "no_text"
+}
+
+pattern DutyHealthCheck(health_url: String) -> String {
+  // health_url: Ok и тело содержит "ok" → ok, иначе "health"
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let NONE = redact("()", "hash_only")
+  let r = try http_get(health_url, 15.0)
+  let is_err = redact(to_string(r), "hash_only")
+  if is_err == NONE {
+    return "health"
+  }
+  let body = to_string(r)
+  let ok_body = redact(to_string(contains(body, "ok")), "hash_only")
+  if ok_body == REF_TRUE {
+    return "ok"
+  }
+  return "health"
+}
+
+pattern DutyRecordPage(schema: String, g: Any, base: String, path: String, expect_text: String, note: String) -> String {
+  // проверка страницы + запись в health_checks; возвращает вердикт
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let t0 = now()
+  let v = DutyCheckPage(base, path, expect_text)
+  let ms = (now() - t0) * 1000.0
+  let mut code = 200.0
+  let mut text_ok = 1.0
+  if redact(to_string(v == "ok"), "hash_only") != REF_TRUE {
+    code = 0.0
+    text_ok = 0.0
+  }
+  let _ = db_execute_with_grant(g, "INSERT INTO " + schema + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), base + path + note, code, ms, text_ok, v])
+  return v
+}
+
+pattern DutyRecordHealth(schema: String, g: Any, health_url: String) -> String {
+  // проверка health_url + запись; возвращает вердикт ok | health
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let t0 = now()
+  let v = DutyHealthCheck(health_url)
+  let ms = (now() - t0) * 1000.0
+  let mut code = 200.0
+  let mut text_ok = 1.0
+  if redact(to_string(v == "ok"), "hash_only") != REF_TRUE {
+    code = 0.0
+    text_ok = 0.0
+  }
+  let _ = db_execute_with_grant(g, "INSERT INTO " + schema + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), health_url, code, ms, text_ok, v])
+  return v
+}
+
+pattern DutyRecheckRow(schema: String, g: Any, base: String, health_url: String, kind: String, path: String, expect_text: String) -> String {
+  // Повторная проверка одной упавшей позиции (подтверждение, A.2):
+  // path="health" — повторная проверка health_url, иначе — страницы.
+  // base/health_url передаются из цикла (без перечитывания паспорта).
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  if redact(to_string(path == "health"), "hash_only") == REF_TRUE {
+    return DutyRecordHealth(schema, g, health_url)
+  }
+  return DutyRecordPage(schema, g, base, path, expect_text, " confirm")
+}
+
+pattern DutyHandleVerdicts(slug: String, schema: String, fails: String, base: String, health_url: String) -> String {
+  // fails — строки "kind|path|expect\n" (path="health" для health_url).
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut opened = 0.0
+  let mut closed = 0.0
+  let mut recovered = 0.0
+  // 1) чистые виды: серия из двух подряд чистых закрывает инцидент вида
+  each kind in ["down", "no_text", "slow", "health"] {
+    let has_kind = redact(to_string(contains(fails, kind + "|")), "hash_only")
+    if has_kind != REF_TRUE {
+      let open_id = inc.DutyOpenIncident(schema, kind)
+      if redact(to_string(open_id >= 0.0), "hash_only") == REF_TRUE {
+        let mk = "acc_clean_" + schema + ":" + kind
+        let had = redact(to_string(kv_exists(mk)), "hash_only")
+        if had == REF_TRUE {
+          let c = inc.DutyCloseIncident(schema, slug, kind, open_id)
+          let _ = kv_delete(mk)
+          if redact(to_string(c == "closed"), "hash_only") == REF_TRUE {
+            closed = closed + 1.0
+          }
+        } else {
+          let _ = kv_set(mk, "1")
+        }
+      }
+    }
+  }
+  // 2) сбои: подтверждение только для видов без открытого инцидента
+  let mut pending = ""
+  let lines = split(fails, "\n")
+  each ln in lines {
+    if redact(to_string(ln == ""), "hash_only") != REF_TRUE {
+      let parts = split(ln, "|")
+      let kind = to_string(get(parts, 0.0))
+      let open_id = inc.DutyOpenIncident(schema, kind)
+      if redact(to_string(open_id < 0.0), "hash_only") == REF_TRUE {
+        pending = pending + ln + "\n"
+      }
+    }
+  }
+  if redact(to_string(pending == ""), "hash_only") != REF_TRUE {
+    // через 60 с повторная проверка только упавших страниц;
+    // грант цикла за время сна истекает (ttl 60с) — свежий после сна
+    let _ = sleep(60.0)
+    let g = grant_issue("db:insert:" + schema + ".health_checks", 300, "unlimited")
+    let lines2 = split(pending, "\n")
+    each ln in lines2 {
+      if redact(to_string(ln == ""), "hash_only") != REF_TRUE {
+        let parts = split(ln, "|")
+        let kind = to_string(get(parts, 0.0))
+        let path = to_string(get(parts, 1.0))
+        let expect_text = to_string(get(parts, 2.0))
+        let v = DutyRecheckRow(schema, g, base, health_url, kind, path, expect_text)
+        if redact(to_string(v == kind), "hash_only") == REF_TRUE {
+          // сбой повторился — открыть (один открытый на сайт+вид)
+          let n_open = inc.DutyOpenCount(schema, kind)
+          if redact(to_string(n_open < 1.0), "hash_only") == REF_TRUE {
+            let summary = kind + " " + path + " с " + to_string(now()) + " (подтверждено повторной проверкой)"
+            let _ = inc.DutyInsertIncident(schema, slug, kind, summary)
+            opened = opened + 1.0
+          }
+        } else {
+          recovered = recovered + 1.0
+        }
+      }
+    }
+  }
+  return "opened=" + to_string(opened) + " closed=" + to_string(closed) + " recovered=" + to_string(recovered)
+}
+
+pattern DutyCheckPassport(slug: String, passport_text: String) -> String {
+  // Один цикл Дежурного по паспорту (проход 1 + подтверждение/инциденты).
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let NONE = redact("()", "hash_only")
+  let j = parse_json(passport_text)
+  let schema = st.SiteDb(slug)
+  let _ = st.SiteInit(slug)
+  let base = to_string(j.url)
+  let checks = j.checks
+  let pages = checks.pages
+  let health_url = to_string(j.repo.health_url)
+  let g = grant_issue("db:insert:" + schema + ".health_checks", 60, "unlimited")
+  let mut fails = ""
+  let mut checked = 0.0
+  let mut failed = 0.0
+  each p in pages {
+    let path = to_string(p.path)
+    let expect_text = to_string(p.expect_text)
+    let v = DutyRecordPage(schema, g, base, path, expect_text, "")
+    checked = checked + 1.0
+    if redact(to_string(v == "ok"), "hash_only") != REF_TRUE {
+      failed = failed + 1.0
+      fails = fails + v + "|" + path + "|" + expect_text + "\n"
+    }
+  }
+  let hv = DutyRecordHealth(schema, g, health_url)
+  checked = checked + 1.0
+  if redact(to_string(hv == "ok"), "hash_only") != REF_TRUE {
+    failed = failed + 1.0
+    fails = fails + hv + "|health|ok\n"
+  }
+  let rep = DutyHandleVerdicts(slug, schema, fails, base, health_url)
+  return "duty: checked=" + to_string(checked) + " failed=" + to_string(failed) + " " + rep
+}
+
+pattern DutyCheck(slug: String) -> String {
+  // Точка входа A.1 по слагу: паспорт из зеркала data/sites/<slug>/.
+  // (Источник истины — sites/<slug>/passport.json, его проверяет CI;
+  // в serve песочница №455 читает только data/ — см. schedule.mlog.)
+  let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+  return DutyCheckPassport(slug, text)
+}

@@ -3,7 +3,14 @@
 // Ответ: {"status":"ok"|"degraded","checks":{...}}; при degraded — HTTP 503.
 // Каталог данных — METALOGOS_DATA_DIR (по умолчанию ./data, ТЗ §13).
 
+import modules/duty/schedule as duty
+
 db { url: "sqlite:data/acc.db" }
+
+// Персистентный kv (АСС-1.3): без persist kv потоколокален — cron-джобы
+// не видны между запросами и рестартами (проба в отчёте наряда); с
+// persist кроны и маркеры SiteInit живут в data/memory.db.
+memory { persist: "data/memory.db" }
 
 mlogserver {
   port: 10000
@@ -46,5 +53,24 @@ mlogserver {
     let _ = ledger_export("data/ledger-export.jsonl")
     let v = ledger_verify("data/ledger-export.jsonl")
     return respond("200 " + json_encode({ok: v.ok, count: ledger_count()}))
+  }
+
+  // Наряд АСС-1.3 A.3: регистрация расписания Дежурного + одна проверка
+  // сразу (ТЗ §15). Токен — как у /internal/ledger/verify (fail-closed).
+  // В 0.32.0 нет стартового хука — регистрация вызовом после старта.
+  route "/internal/duty/bootstrap" method=GET {
+    let REF_TRUE = redact(to_string(true), "hash_only")
+    let REF_FALSE = redact(to_string(false), "hash_only")
+    let expected = env("ACC_INTERNAL_TOKEN")
+    if expected == "" then {
+      return respond("503 " + json_encode({error: "internal token not configured"}))
+    }
+    let got = redact(query_param("token"), "all")
+    let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
+    if ok == REF_FALSE then {
+      return respond("401 " + json_encode({error: "unauthorized"}))
+    }
+    let report = duty.DutyBootstrap()
+    return respond("200 " + json_encode({report: report}))
   }
 }
