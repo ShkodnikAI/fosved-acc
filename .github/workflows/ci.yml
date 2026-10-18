@@ -42,6 +42,8 @@ jobs:
             mlog audit "$f" | tee audit.log
             if grep -q '\[ERROR\]' audit.log; then echo "audit ERROR в $f"; exit 1; fi
           done
+      - name: Passport validation
+        run: mlog run tests/passport/run.mlog | tee /dev/stderr | grep -q "FAIL=0"
 
   probes:
     name: Probes Metalogos (АСС-0, блок B)

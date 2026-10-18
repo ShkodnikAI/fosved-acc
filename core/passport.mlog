@@ -1,0 +1,292 @@
+// ============================================================
+// Валидатор паспорта сайта (наряд АСС-1.1, A.4; диспатч #10).
+// ValidatePassport(text) -> "ok" | "<поле>: <что не так>".
+//
+// Правила (наряд АСС-1.1 A.4):
+//  1. обязательные поля верхнего уровня (16 ключей из A.3);
+//  2. slug ~ ^[a-z0-9-]{2,32}$;
+//  3. url и repo.health_url начинаются с https://;
+//  4. profile ∈ showcase|service|ugc|paid;
+//  5. participation ∈ pr_with_approval|report_only;
+//  6. platform.adapter ∈ render|home-server;
+//  7. каждое значение ключа *_env — null или ~ ^[A-Z][A-Z0-9_]{2,63}$
+//     (null и отсутствующий ключ считаются «не задано»);
+//  8. запрет секретов: (а) ключи token|key|secret|password|api_key на любой
+//     глубине; (б) строки с префиксом sk-|ghp_|github_pat_|xox; (в) значения
+//     из 6–12 цифр (похоже на Telegram id) — строки и целые числа;
+//  9. каждый id из sources есть в registry/sources.json со статусом active;
+// 10. domain.warn_days — строго по убыванию, все больше 0.
+//
+// Безопасность Metalogos 0.32.0: текст паспорта приходит через read_file,
+// поэтому все производные от него данные недоверены. Решения if по ним
+// запрещены (UNTRUSTED_DECISION), причём результат и вызова паттерна с
+// недоверенным аргументом тоже недоверен (интерпроцедурный taint, урок
+// наряда #546 FOSVED-office-v2). Единственная чистая форма решения —
+// inline-барьер в самом условии:
+//     if redact(to_string(<предикат>), "hash_only") == REF_TRUE { ... }
+// redact(…,"hash_only") детерминирован на 0.32.0, фингерпринты "true"/"false"
+// различимы, поэтому барьер сохраняет смысл предиката. Недоверенные имена
+// полей в сообщениях об ошибках проходят Clean = redact(…,"all"): обычные
+// имена остаются как есть, секретоподобные маскируются. Значения секретов
+// валидатор не печатает — только путь поля и причину.
+
+// Путь в паспорте: "repo.github" / "people.approver_tg_env" / "pages[].path".
+pattern JoinPath(path: String, k: String) -> String {
+  if redact(to_string(path == ""), "hash_only") == redact(to_string(true), "hash_only") {
+    return redact(k, "all")
+  }
+  return redact(path, "all") + "." + redact(k, "all")
+}
+
+// Правило 8 (б,в) для одной строки: "" | "<путь>: <причина>".
+pattern ScanString(s: String, path: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let sw1 = redact(to_string(starts_with(s, "sk-")), "hash_only")
+  if sw1 == REF_TRUE { return path + ": строка похожа на секрет (запрещённый префикс)" }
+  let sw2 = redact(to_string(starts_with(s, "ghp_")), "hash_only")
+  if sw2 == REF_TRUE { return path + ": строка похожа на секрет (запрещённый префикс)" }
+  let sw3 = redact(to_string(starts_with(s, "github_pat_")), "hash_only")
+  if sw3 == REF_TRUE { return path + ": строка похожа на секрет (запрещённый префикс)" }
+  let sw4 = redact(to_string(starts_with(s, "xox")), "hash_only")
+  if sw4 == REF_TRUE { return path + ": строка похожа на секрет (запрещённый префикс)" }
+  let dgt = redact(to_string(regex_match("^[0-9]{6,12}$", s)), "hash_only")
+  if dgt == REF_TRUE { return path + ": значение из 6–12 цифр — похоже на Telegram id" }
+  return ""
+}
+
+// Правило 8 по дереву паспорта: "" (чисто) | первая ошибка.
+pattern ScanSecrets(v: Any, path: String, depth: Float) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  if redact(to_string(depth > 12.0), "hash_only") == REF_TRUE { return "" }
+  let t = type_of(v)
+  if redact(to_string(t == "Struct"), "hash_only") == REF_TRUE {
+    let ks = dict_keys(v)
+    each k in ks {
+      // правило 8а — запрещённые имена ключей на любой глубине
+      let n1 = redact(to_string(k == "token"), "hash_only")
+      if n1 == REF_TRUE { return JoinPath(path, k) + ": запрещённое имя ключа" }
+      let n2 = redact(to_string(k == "key"), "hash_only")
+      if n2 == REF_TRUE { return JoinPath(path, k) + ": запрещённое имя ключа" }
+      let n3 = redact(to_string(k == "secret"), "hash_only")
+      if n3 == REF_TRUE { return JoinPath(path, k) + ": запрещённое имя ключа" }
+      let n4 = redact(to_string(k == "password"), "hash_only")
+      if n4 == REF_TRUE { return JoinPath(path, k) + ": запрещённое имя ключа" }
+      let n5 = redact(to_string(k == "api_key"), "hash_only")
+      if n5 == REF_TRUE { return JoinPath(path, k) + ": запрещённое имя ключа" }
+      let sub = ScanSecrets(dict_get(v, k, ""), JoinPath(path, k), depth + 1.0)
+      if redact(to_string(sub == ""), "hash_only") == REF_FALSE { return sub }
+    }
+    return ""
+  }
+  if redact(to_string(t == "List"), "hash_only") == REF_TRUE {
+    each x in v {
+      let sub2 = ScanSecrets(x, path, depth + 1.0)
+      if redact(to_string(sub2 == ""), "hash_only") == REF_FALSE { return sub2 }
+    }
+    return ""
+  }
+  if redact(to_string(t == "String"), "hash_only") == REF_TRUE {
+    return ScanString(v, path)
+  }
+  if redact(to_string(t == "Float"), "hash_only") == REF_TRUE {
+    let ts = to_string(v)
+    let dnum = redact(to_string(regex_match("^[0-9]{6,12}$", ts)), "hash_only")
+    if dnum == REF_TRUE {
+      return path + ": число из 6–12 цифр — похоже на Telegram id"
+    }
+    return ""
+  }
+  return ""
+}
+
+// Правило 7: обход дерева; ключи *_env — null или имя переменной окружения.
+pattern ScanEnvs(v: Any, path: String, depth: Float) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  if redact(to_string(depth > 12.0), "hash_only") == REF_TRUE { return "" }
+  let t = type_of(v)
+  if redact(to_string(t == "Struct"), "hash_only") == REF_TRUE {
+    let ks = dict_keys(v)
+    each k in ks {
+      let is_env = redact(to_string(ends_with(k, "_env")), "hash_only")
+      if is_env == REF_TRUE {
+        // null/отсутствие -> dict_get вернёт маркер; маркер пропускается
+        let val = dict_get(v, k, " UNSET-ENV-MARKER")
+        let is_unset = redact(to_string(val == " UNSET-ENV-MARKER"), "hash_only")
+        if is_unset == REF_FALSE {
+          let vt = type_of(val)
+          let is_str = redact(to_string(vt == "String"), "hash_only")
+          if is_str == REF_FALSE {
+            return JoinPath(path, k) + ": значение *_env должно быть null или именем переменной окружения"
+          }
+          let fmt = redact(to_string(regex_match("^[A-Z][A-Z0-9_]{2,63}$", val)), "hash_only")
+          if fmt == REF_FALSE {
+            return JoinPath(path, k) + ": должно быть null или именем переменной окружения вида ИМЯ_ПЕРЕМЕННОЙ"
+          }
+        }
+      }
+      let sub = ScanEnvs(dict_get(v, k, ""), JoinPath(path, k), depth + 1.0)
+      if redact(to_string(sub == ""), "hash_only") == REF_FALSE { return sub }
+    }
+    return ""
+  }
+  if redact(to_string(t == "List"), "hash_only") == REF_TRUE {
+    each x in v {
+      let sub2 = ScanEnvs(x, path, depth + 1.0)
+      if redact(to_string(sub2 == ""), "hash_only") == REF_FALSE { return sub2 }
+    }
+    return ""
+  }
+  return ""
+}
+
+// Правило 9: каждый id из sources есть в registry/sources.json со статусом active.
+pattern CheckSources(j: Any) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let srcs = json_get(j, "sources", "")
+  if redact(to_string(type_of(srcs) == "List"), "hash_only") == redact(to_string(false), "hash_only") {
+    return "sources: должен быть массивом идентификаторов"
+  }
+  if redact(to_string(file_exists("registry/sources.json")), "hash_only") == redact(to_string(false), "hash_only") {
+    return "sources: реестр registry/sources.json не найден"
+  }
+  let rj = try parse_json(read_file("registry/sources.json"))
+  if redact(to_string(rj.ok == false), "hash_only") == REF_TRUE {
+    return "sources: реестр registry/sources.json — невалидный JSON"
+  }
+  let reg = rj.value
+  if redact(to_string(type_of(reg) == "List"), "hash_only") == redact(to_string(false), "hash_only") {
+    return "sources: реестр registry/sources.json должен быть массивом"
+  }
+  each src in srcs {
+    let mut found = 0.0
+    each rec in reg {
+      let id_match = redact(to_string(dict_get(rec, "id", "") == src), "hash_only")
+      if id_match == REF_TRUE {
+        let st_match = redact(to_string(dict_get(rec, "status", "") == "active"), "hash_only")
+        if st_match == REF_TRUE {
+          found = found + 1.0
+        }
+      }
+    }
+    if redact(to_string(found == 0.0), "hash_only") == REF_TRUE {
+      return "sources: " + redact(src, "all") + " отсутствует в реестре registry/sources.json или его статус не active"
+    }
+  }
+  return ""
+}
+
+// Правило 10: domain.warn_days — строго по убыванию, все больше 0.
+pattern CheckWarnDays(j: Any) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  let wd = json_get(j, "domain.warn_days", "")
+  if redact(to_string(type_of(wd) == "List"), "hash_only") == REF_FALSE {
+    return "domain.warn_days: должен быть массивом чисел"
+  }
+  let mut prev = 0.0
+  let mut first = true
+  each w in wd {
+    if redact(to_string(type_of(w) == "Float"), "hash_only") == REF_FALSE {
+      return "domain.warn_days: все элементы должны быть числами"
+    }
+    if redact(to_string(w <= 0.0), "hash_only") == REF_TRUE {
+      return "domain.warn_days: все пороги должны быть больше 0"
+    }
+    let not_first = redact(to_string(first == false), "hash_only")
+    if not_first == REF_TRUE {
+      if redact(to_string(w >= prev), "hash_only") == REF_TRUE {
+        return "domain.warn_days: пороги должны быть строго по убыванию"
+      }
+    }
+    prev = w
+    first = false
+  }
+  return ""
+}
+
+// Главная точка входа: текст паспорта -> "ok" | "<поле>: <что не так>".
+pattern ValidatePassport(text: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  let r = try parse_json(text)
+  if redact(to_string(r.ok == false), "hash_only") == REF_TRUE {
+    return "json: не разбирается (" + r.error.code + ")"
+  }
+  let j = r.value
+  if redact(to_string(type_of(j) == "Struct"), "hash_only") == REF_FALSE {
+    return "json: корень должен быть объектом"
+  }
+  // правило 1 — обязательные поля верхнего уровня (16 ключей из A.3 наряда)
+  if redact(to_string(has_field(j, "slug") == 1.0), "hash_only") == REF_FALSE { return "slug: отсутствует" }
+  if redact(to_string(has_field(j, "name") == 1.0), "hash_only") == REF_FALSE { return "name: отсутствует" }
+  if redact(to_string(has_field(j, "url") == 1.0), "hash_only") == REF_FALSE { return "url: отсутствует" }
+  if redact(to_string(has_field(j, "languages") == 1.0), "hash_only") == REF_FALSE { return "languages: отсутствует" }
+  if redact(to_string(has_field(j, "timezone") == 1.0), "hash_only") == REF_FALSE { return "timezone: отсутствует" }
+  if redact(to_string(has_field(j, "people") == 1.0), "hash_only") == REF_FALSE { return "people: отсутствует" }
+  if redact(to_string(has_field(j, "repo") == 1.0), "hash_only") == REF_FALSE { return "repo: отсутствует" }
+  if redact(to_string(has_field(j, "checks") == 1.0), "hash_only") == REF_FALSE { return "checks: отсутствует" }
+  if redact(to_string(has_field(j, "modules") == 1.0), "hash_only") == REF_FALSE { return "modules: отсутствует" }
+  if redact(to_string(has_field(j, "limits") == 1.0), "hash_only") == REF_FALSE { return "limits: отсутствует" }
+  if redact(to_string(has_field(j, "domain") == 1.0), "hash_only") == REF_FALSE { return "domain: отсутствует" }
+  if redact(to_string(has_field(j, "profile") == 1.0), "hash_only") == REF_FALSE { return "profile: отсутствует" }
+  if redact(to_string(has_field(j, "participation") == 1.0), "hash_only") == REF_FALSE { return "participation: отсутствует" }
+  if redact(to_string(has_field(j, "platform") == 1.0), "hash_only") == REF_FALSE { return "platform: отсутствует" }
+  if redact(to_string(has_field(j, "models") == 1.0), "hash_only") == REF_FALSE { return "models: отсутствует" }
+  if redact(to_string(has_field(j, "sources") == 1.0), "hash_only") == REF_FALSE { return "sources: отсутствует" }
+  // правило 2 — slug
+  let slugv = json_get(j, "slug", "")
+  if redact(to_string(regex_match("^[a-z0-9-]{2,32}$", slugv)), "hash_only") == REF_FALSE {
+    return "slug: должен состоять из строчных букв, цифр и дефиса, 2–32 символа"
+  }
+  // правило 3 — https
+  let urlv = json_get(j, "url", "")
+  if redact(to_string(starts_with(urlv, "https://")), "hash_only") == REF_FALSE {
+    return "url: должен начинаться с https://"
+  }
+  let huv = json_get(j, "repo.health_url", "")
+  if redact(to_string(starts_with(huv, "https://")), "hash_only") == REF_FALSE {
+    return "repo.health_url: должен начинаться с https://"
+  }
+  // правило 4 — profile
+  let pv = json_get(j, "profile", "")
+  let p1 = redact(to_string(pv == "showcase"), "hash_only") == REF_TRUE
+  let p2 = redact(to_string(pv == "service"), "hash_only") == REF_TRUE
+  let p3 = redact(to_string(pv == "ugc"), "hash_only") == REF_TRUE
+  let p4 = redact(to_string(pv == "paid"), "hash_only") == REF_TRUE
+  if redact(to_string(p1 or p2 or p3 or p4), "hash_only") == REF_FALSE {
+    return "profile: должно быть showcase, service, ugc или paid"
+  }
+  // правило 5 — participation
+  let pav = json_get(j, "participation", "")
+  let q1 = redact(to_string(pav == "pr_with_approval"), "hash_only") == REF_TRUE
+  let q2 = redact(to_string(pav == "report_only"), "hash_only") == REF_TRUE
+  if redact(to_string(q1 or q2), "hash_only") == REF_FALSE {
+    return "participation: должно быть pr_with_approval или report_only"
+  }
+  // правило 6 — platform.adapter
+  let adv = json_get(j, "platform.adapter", "")
+  let a1 = redact(to_string(adv == "render"), "hash_only") == REF_TRUE
+  let a2 = redact(to_string(adv == "home-server"), "hash_only") == REF_TRUE
+  if redact(to_string(a1 or a2), "hash_only") == REF_FALSE {
+    return "platform.adapter: должно быть render или home-server"
+  }
+  // правило 7 — *_env
+  let e1 = ScanEnvs(j, "", 0.0)
+  if redact(to_string(e1 == ""), "hash_only") == REF_FALSE { return e1 }
+  // правило 8 — секреты
+  let s1 = ScanSecrets(j, "", 0.0)
+  if redact(to_string(s1 == ""), "hash_only") == REF_FALSE { return s1 }
+  // правило 9 — sources против реестра
+  let c1 = CheckSources(j)
+  if redact(to_string(c1 == ""), "hash_only") == REF_FALSE { return c1 }
+  // правило 10 — warn_days
+  let w1 = CheckWarnDays(j)
+  if redact(to_string(w1 == ""), "hash_only") == REF_FALSE { return w1 }
+  return "ok"
+}
+
+flow Main {
+  input: String = "" -> ValidatePassport -> output
+}
