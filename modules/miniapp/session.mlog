@@ -1,0 +1,85 @@
+// Mini App — сессии по подписанной ссылке (наряд АСС-2.2, A.1; ТЗ §14, §11).
+//
+// SessionIssue() — токен "<exp>.<hmac_sha256(ACC_SESSION_SECRET, "acc-app:" + exp)>",
+// exp = now_unix() + 1800 (30 минут, ТЗ §14).
+//
+// SessionValid(tok) — формат (<exp> — число, <sig> — hex 64), срок, подпись.
+// Сравнения — redact(…, "hash_only") С ОБЕИХ сторон (решение диспатча #20:
+// redact(…, "all") маскирует похожие на токены значения — Metalogos-#1317,
+// FOSVED-office-v2 #546 — и ломает сравнение). Все решения по недоверенным
+// данным (токен из заголовка/ссылки) — через inline-барьер (рецепт #546).
+// Пустой ACC_SESSION_SECRET → false (fail-closed; маршруты дают 503, бот —
+// «не настроено»).
+//
+// Почему не initData (факт наряда): стандартная проверка Telegram Mini App
+// требует ключом HMAC сырые байты первого HMAC; hmac_sha256 возвращает
+// hex-строку и принимает String-ключ — выполнимость не установлена. Подпись
+// ссылки считается hex-ключом — это проверяемо.
+//
+// Факты платформы (REFERENCE 0.32.0, проба сессии): hmac_sha256(key,
+// message) -> 64 hex (строка 1065); now_unix() -> Float (секунды UTC).
+
+pattern SessionIssue() -> String {
+  // секрет вне allowlist в serve — Err (ENV_NOT_PERMITTED) → try → "()":
+  // пустой токен (выдача без секрета невозможна — fail-closed)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let secret = try env_or("ACC_SESSION_SECRET", "")
+  let secret_s = to_string(secret)
+  let no_secret = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+  if no_secret == REF_TRUE {
+    return ""
+  }
+  // exp — целые секунды (to_int): дробный to_string(Float) рождает
+  // лишнюю точку в токене "<exp>.<sig>" (проба сессии)
+  let exp = to_int(now_unix() + 1800.0)
+  let exp_s = to_string(exp)
+  let mac = hmac_sha256(secret_s, "acc-app:" + exp_s)
+  return exp_s + "." + mac
+}
+
+pattern SessionValid(tok: String) -> Bool {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 0) fail-closed: секрет не настроен/недоступен (Err вне allowlist) —
+  // валидных сессий нет
+  let secret = try env_or("ACC_SESSION_SECRET", "")
+  let secret_s = to_string(secret)
+  let sec_bad = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+  if sec_bad == REF_TRUE {
+    return false
+  }
+  // 1) формат: "<exp>.<sig>" — exp число, sig hex 64 (hmac_sha256)
+  let parts = split(tok, ".")
+  let np = len(parts)
+  let two = redact(to_string(to_float(to_string(np)) == 2.0), "hash_only")
+  if two != REF_TRUE {
+    return false
+  }
+  let exp_s = to_string(get(parts, 0.0))
+  let sig = to_string(get(parts, 1.0))
+  let exp_fmt = redact(to_string(regex_match("^[0-9]+$", exp_s)), "hash_only")
+  if exp_fmt != REF_TRUE {
+    return false
+  }
+  let sig_fmt = redact(to_string(regex_match("^[0-9a-f]{64}$", sig)), "hash_only")
+  if sig_fmt != REF_TRUE {
+    return false
+  }
+  // 2) срок: exp больше текущего unix-времени
+  let exp = try to_float(exp_s)
+  let exp_err = redact(to_string(exp), "hash_only")
+  if exp_err == redact("()", "hash_only") {
+    return false
+  }
+  let fresh = redact(to_string(to_float(to_string(exp)) > now_unix()), "hash_only")
+  if fresh != REF_TRUE {
+    return false
+  }
+  // 3) подпись: hmac секретом по тому же exp; hash_only с обеих сторон
+  let mac = hmac_sha256(secret_s, "acc-app:" + exp_s)
+  let eq = redact(to_string(mac), "hash_only") == redact(to_string(sig), "hash_only")
+  let eq_ok = redact(to_string(eq), "hash_only")
+  if eq_ok != REF_TRUE {
+    return false
+  }
+  return true
+}

@@ -43,6 +43,49 @@
 
 import core/store as st
 import core/ledger as lg
+import modules/miniapp/session as mini
+
+pattern SecSendAppButton() -> String {
+  // /app (наряд АСС-2.2, A.1): кнопка web_app с подписанной ссылкой на
+  // Mini App. ТОЛЬКО владелец (вызов из SecWebhook после owner-гварда).
+  // URL: ACC_PUBLIC_URL + "/app#s=<токен>" — токен в #-части, в логи
+  // сервера не уходит. Fail-closed: пустой ACC_SESSION_SECRET или
+  // ACC_PUBLIC_URL → «не настроено», без кнопки и без открытого доступа.
+  // Сравнений по секретам нет — токен не сравнивается, только выдаётся.
+  // В моке (полигон) — запись в mock_sends БЕЗ токена (секрет-подобные
+  // строки не гуляют по журналам; токен проверяется юнитом SessionValid).
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // Err (имя вне allowlist в serve) — тоже «не настроено», fail-closed
+  let secret = try env_or("ACC_SESSION_SECRET", "")
+  let secret_s = to_string(secret)
+  let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+  if sec_empty == REF_TRUE {
+    return "Mini App не настроено (ACC_SESSION_SECRET не задан) — см. docs/runbook/deploy.md, шаг 2."
+  }
+  let base = try env_or("ACC_PUBLIC_URL", "")
+  let base_s = to_string(base)
+  let base_empty = redact(to_string(base_s == "()" or base_s == ""), "hash_only")
+  if base_empty == REF_TRUE {
+    return "Mini App не настроено (ACC_PUBLIC_URL не задан) — см. docs/runbook/deploy.md, шаг 2."
+  }
+  let tok = mini.SessionIssue()
+  let url = base_s + "/app#s=" + tok
+  let mock = redact(to_string(kv_get("acc_mock_send") == "1"), "hash_only")
+  if mock == REF_TRUE {
+    // мок полигона: факт отправки кнопки, токен в журнал не пишем
+    let gi = grant_issue("db:insert:mock_sends", 60, "unlimited")
+    let _ = db_execute_with_grant(gi, "INSERT INTO mock_sends (ts, text) VALUES (?1, ?2)", [now(), "[app-button] sent"])
+    return "ok"
+  }
+  // прод: кнопка web_app (reply_markup), opts bot: "acc" — как в SecSend
+  let r = try send_message(env_or("ACC_OWNER_TG_ID", ""), "Вход в АСС (ссылка на 30 минут):", {inline_keyboard: [[{text: "Открыть АСС", web_app: {url: url}}]]}, {bot: "acc"})
+  let NONE = redact("()", "hash_only")
+  let is_err = redact(to_string(r), "hash_only")
+  if is_err == NONE {
+    return "error: send failed"
+  }
+  return "ok"
+}
 
 pattern SecSend(chat_id: String, text: String) -> String {
   // шов доставки: прод — Telegram, полигон — mock_sends (см. шапку).
@@ -71,7 +114,7 @@ pattern SecReply(text: String) -> String {
 }
 
 pattern SecHelp() -> String {
-  return "Команды АСС:\n/status — состояние сайтов\n/site <slug> — детали сайта\n/pause <slug> — пауза событий сайта\n/resume <slug> — снять паузу\n/lockdown — глобальный флаг тревоги\n/unlock — снять lockdown\n/cost — на этапе 1 нет\n/report — на этапе 1 нет"
+  return "Команды АСС:\n/status — состояние сайтов\n/site <slug> — детали сайта\n/pause <slug> — пауза событий сайта\n/resume <slug> — снять паузу\n/lockdown — глобальный флаг тревоги\n/unlock — снять lockdown\n/app — вход в Mini App (кнопка, ссылка на 30 минут)\n/cost — на этапе 1 нет\n/report — на этапе 1 нет"
 }
 
 pattern SecIsPaused(schema: String) -> String {
@@ -379,6 +422,18 @@ pattern SecWebhook() -> String {
     return "200 {}"
   }
   // 5) команда → ответ владельцу
+  // /app (АСС-2.2): кнопка уходит швом send_message с reply_markup;
+  // текстовый ответ — только при «не настроено»/ошибке (кнопка — не текст)
+  let c_app = redact(to_string(text == "/app"), "hash_only")
+  if c_app == REF_TRUE {
+    let r = SecSendAppButton()
+    let app_ok = redact(to_string(r == "ok"), "hash_only")
+    if app_ok == REF_TRUE {
+      return "200 {}"
+    }
+    let _ = SecReply(r)
+    return "200 {}"
+  }
   let reply = SecHandleText(text)
   let sent = SecReply(reply)
   let sent_ok = redact(to_string(sent == "ok"), "hash_only")
