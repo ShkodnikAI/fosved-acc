@@ -16,5 +16,14 @@
     "frequency": "weekly",
     "terms_checked": true,
     "status": "active"
+  },
+  {
+    "id": "healthchecks-hc-ping",
+    "kind": "watchdog",
+    "domain": "hc-ping.com",
+    "read_method": "http",
+    "frequency": "per-cycle",
+    "terms_checked": true,
+    "status": "active"
   }
 ]
