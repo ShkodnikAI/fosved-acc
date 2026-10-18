@@ -94,6 +94,16 @@ pattern HttpAllowed(url: String) -> Bool {
   if host_empty == redact(to_string(true), "hash_only") {
     return false
   }
+  // временные разрешения разведки (АСС-2.5): kv acc_http_tmp:<host> = exp —
+  // ставит IntakeAllowDomain только на время разведки одного хоста (10 мин)
+  let tmp_exp = try to_float(to_string(kv_get("acc_http_tmp:" + host)))
+  let tmp_err = redact(to_string(tmp_exp), "hash_only")
+  if tmp_err != redact("()", "hash_only") {
+    let fresh = redact(to_string(to_float(to_string(tmp_exp)) > now_unix()), "hash_only")
+    if fresh == redact(to_string(true), "hash_only") {
+      return true
+    }
+  }
   let mut found = false
   each d in AllowedDomains() {
     let hit = redact(to_string(to_string(d) == host), "hash_only")

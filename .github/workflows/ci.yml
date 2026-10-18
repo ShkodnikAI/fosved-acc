@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -106,6 +107,19 @@ jobs:
           bash tests/serve/duty_serve.sh mlog vm
           echo "::notice title=VM green::VM: Metalogos-#1336 исправлен? Проверить релиз и вернуть VM (ADR-0003)"
 
+  intake:
+    name: "Intake: приём сайта — разведка (АСС-2.5 A.3)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mlog (pinned SHA256)
+        run: |
+          curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
+          echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
+          chmod +x /usr/local/bin/mlog
+      - name: Разведка — 7/7 + VM-проба бота
+        run: bash tests/intake/run.sh mlog | tee intake.out | grep -q "INTAKE OK"
+
   checks:
     name: "Checks: скрипты сроков (юнит с моками сети + smoke)"
     runs-on: ubuntu-24.04
@@ -174,7 +188,7 @@ jobs:
     name: Deploy to Render (hook, ref=SHA)
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [layout, mlog, store, serve, checks, probes, secrets, docker]
+    needs: [layout, mlog, store, serve, intake, checks, probes, secrets, docker]
     steps:
       - name: Деплой по хуку Render (параметр ref=SHA, документация Render — C.1)
         env:

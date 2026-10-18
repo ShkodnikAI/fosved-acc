@@ -45,6 +45,7 @@ import core/store as st
 import core/ledger as lg
 import core/status as status
 import modules/miniapp/session as mini
+import modules/intake/recon as intake
 
 pattern SecSendAppButton() -> String {
   // /app (наряд АСС-2.2, A.1): кнопка web_app с подписанной ссылкой на
@@ -390,6 +391,19 @@ pattern SecWebhook() -> String {
     return "200 {}"
   }
   // 5) команда → ответ владельцу
+  // «прими сайт <адрес>» (АСС-2.5): разведка только на чтение → черновик
+  let is_intake = redact(to_string(starts_with(text, "прими сайт ")), "hash_only")
+  if is_intake == REF_TRUE {
+    let url = substring(text, to_float(to_string(len("прими сайт "))), to_float(to_string(len(text))))
+    let url_ok = redact(to_string(starts_with(url, "https://") or starts_with(url, "http://")), "hash_only")
+    if url_ok != REF_TRUE {
+      let _ = SecReply("Адрес должен начинаться с https:// (или http:// для проверки).")
+      return "200 {}"
+    }
+    let rep = intake.IntakeCommand(url)
+    let _ = SecReply(rep)
+    return "200 {}"
+  }
   // /app (АСС-2.2): кнопка уходит швом send_message с reply_markup;
   // текстовый ответ — только при «не настроено»/ошибке (кнопка — не текст)
   let c_app = redact(to_string(text == "/app"), "hash_only")
