@@ -16,6 +16,7 @@ RUN apt-get update \
 RUN useradd --system --create-home --home-dir /app acc
 WORKDIR /app
 COPY app.mlog /app/app.mlog
+COPY scripts/docker-audit.sh /app/scripts/docker-audit.sh
 # АСС-1.3: импорты модулей (core/store, core/ledger, modules/duty/*)
 COPY core /app/core
 COPY modules /app/modules
@@ -42,5 +43,7 @@ EXPOSE 10000
 # METALOGOS_SERVE_ALLOW_EXEC (проба B.7).
 ENV METALOGOS_ALLOW_EXEC=1 METALOGOS_SERVE_ALLOW_EXEC=1
 # Проверка образа на сборке: синтаксис и аудит безопасности без ошибок.
-RUN mlog check app.mlog && mlog audit app.mlog
+# Единственный задокументированный допуск — WARN csrf для /tg
+# (см. scripts/docker-audit.sh и комментарий middleware в app.mlog).
+RUN /app/scripts/docker-audit.sh
 CMD ["mlog", "serve", "app.mlog"]

@@ -1,0 +1,35 @@
+// Подготовка полигона Секретаря (наряд АСС-1.5, A.5) — запуск в
+// run-режиме из корня временного дерева (run.sh). Та же главная БД и kv,
+// что и у serve-процесса полигона (data/acc.db, data/memory.db):
+//   1. таблица mock_sends (мок шва SecSend) + kv acc_mock_send=1
+//      (ставится ТОЛЬКО тестом — в проде шов шлёт через Telegram API);
+//   2. сайт tega: открытый инцидент + недоставленное событие
+//      incident_open (sent_ts NULL) + накопленное «сводочное» событие
+//      deadline_warn (sent_ts NULL).
+import core/store as st
+
+db { url: "sqlite:data/acc.db" }
+memory { persist: "data/memory.db" }
+
+pattern Main1(x: String) -> String {
+  // 1) мок доставки
+  let gi = grant_issue("db:insert:mock_sends", 60, "unlimited")
+  let _ = db_execute_with_grant(gi, "CREATE TABLE IF NOT EXISTS mock_sends (ts REAL, text TEXT)", [])
+  let _ = kv_set("acc_mock_send", "1")
+  // 2) сайт tega: схема/таблицы
+  let schema = st.SiteDb("tega")
+  let _ = st.SiteInit("tega")
+  // открытый инцидент (closed_ts NULL)
+  let gi2 = grant_issue("db:insert:" + schema + ".incidents", 60, "unlimited")
+  let _ = db_execute_with_grant(gi2, "INSERT INTO " + schema + ".incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, ?2, ?3, NULL)", [now() - 100.0, "down", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
+  // недоставленное срочное событие (уходит в цикле доставки)
+  let gi3 = grant_issue("db:insert:" + schema + ".events", 60, "unlimited")
+  let _ = db_execute_with_grant(gi3, "INSERT INTO " + schema + ".events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 100.0, "incident_open", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
+  // накопленное событие для утренней сводки (не «срочное»)
+  let _ = db_execute_with_grant(gi3, "INSERT INTO " + schema + ".events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 50.0, "deadline_warn", "domain tega.plus осталось 20 дн (порог 30, expires 2026-11-07)"])
+  return "prologue ok"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

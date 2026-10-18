@@ -5,6 +5,8 @@
 
 import modules/duty/schedule as duty
 import modules/deadlines/run as dl
+import modules/secretary/bot as bot
+import modules/secretary/deliver as sec
 
 db { url: "sqlite:data/acc.db" }
 
@@ -16,6 +18,12 @@ memory { persist: "data/memory.db" }
 mlogserver {
   port: 10000
   host: "0.0.0.0"
+  // NB: csrf middleware НЕ включён — он 403-ит Telegram-webhook
+  // (server-to-server, cookie/csrf-токена нет; проба АСС-1.5:
+  // "403 Forbidden: CSRF token validation failed"). Аутентификация /tg —
+  // секрет-заголовок через ct_eq (A.1) — эквивалент цели csrf для
+  // non-browser клиента. WARN аудита "POST routes without CSRF
+  // middleware" — задокументированный допуск (scripts/docker-audit.sh).
   middleware: [rate_limit, security_headers]
 
   route "/health" method=GET {
@@ -91,6 +99,32 @@ mlogserver {
       return respond("401 " + json_encode({error: "unauthorized"}))
     }
     let report = dl.DlBootstrap()
+    return respond("200 " + json_encode({report: report}))
+  }
+
+  // Наряд АСС-1.5 A.1: webhook бота АСС. Вся логика — bot.SecWebhook()
+  // (секрет ct_eq, owner-only, команды); здесь — тонкая обёртка. Мост
+  // redact(…, "all") — HTML_INJECTION на недоверенных производных.
+  route "/tg" method=POST {
+    let r = bot.SecWebhook()
+    return respond(redact(r, "all"))
+  }
+
+  // Наряд АСС-1.5 A.3+A.4: регистрация расписаний Секретаря (поминутная
+  // доставка + утренняя сводка), идемпотентно. Токен — как выше.
+  route "/internal/secretary/bootstrap" method=GET {
+    let REF_TRUE = redact(to_string(true), "hash_only")
+    let REF_FALSE = redact(to_string(false), "hash_only")
+    let expected = env("ACC_INTERNAL_TOKEN")
+    if expected == "" then {
+      return respond("503 " + json_encode({error: "internal token not configured"}))
+    }
+    let got = redact(query_param("token"), "all")
+    let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
+    if ok == REF_FALSE then {
+      return respond("401 " + json_encode({error: "unauthorized"}))
+    }
+    let report = sec.SecBootstrap()
     return respond("200 " + json_encode({report: report}))
   }
 }

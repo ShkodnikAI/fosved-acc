@@ -1,0 +1,389 @@
+// Секретарь — бот АСС (наряд АСС-1.5, A.1+A.2; ТЗ §6, §11, §14).
+//
+// SecWebhook() — вся логика webhook'а POST /tg; маршрут в app.mlog —
+// тонкая обёртка respond(redact(bot.SecWebhook(), "all")) (маршруты
+// объявляются только в mlogserver — рецепт АСС-1.3).
+//   1. пустой ACC_TELEGRAM_WEBHOOK_SECRET или ACC_OWNER_TG_ID → 503,
+//      не открытый доступ (fail-closed);
+//   2. заголовок X-Telegram-Bot-Api-Secret-Token сверяется ct_eq
+//      (сравнение без утечки по времени, Metalogos N2/gh#1211); не
+//      совпал → 403;
+//   3. отправитель ≠ ACC_OWNER_TG_ID → молча 200 без ответа + Journal
+//      «чужой отправитель» без id в events каждого сайта с модулем
+//      secretary (Journal = events + ledger; глобальных events нет —
+//      решение записывать в журналы обслуживаемых сайтов, один сайт —
+//      одна запись);
+//   4. владелец: текст команды → SecHandleText → ответ владельцу.
+//
+// SecSend(chat_id, text) — шов доставки. Прод: send_message(chat_id,
+// text, {bot: "acc"}) — токен из TELEGRAM_BOT_TOKEN_ACC (REFERENCE N3;
+// проба сессии: опция работает, 401 от реального API с фейковым токеном;
+// без env — Err, fail-closed). Полигон (A.5): базовый адрес api.telegram.org
+// в 0.32.0 не переопределяется (strings бинаря + проба), поэтому мок — на
+// уровне шва: kv acc_mock_send=1 (ставится ТОЛЬКО полигоном) → запись в
+// таблицу mock_sends главной БД вместо сети. Прод-флаг никогда не ставит.
+// Текст перед send_message мостится redact(…, "all") — UNTRUSTED_EGRESS_
+// NETWORK (проба сессии); в текстах сообщений секретов нет (статусы,
+// инциденты, сроки — без id/токенов; наряд: ни id, ни токен не выводить).
+//
+// Команды (A.2, ТЗ §14): /status, /site <slug>, /pause, /resume,
+// /lockdown, /unlock, /cost, /report, неизвестная → список.
+// Пауза сайта — флаг в events сайта (записи kind=paused/resumed; флаг =
+// последняя из них; переживает рестарт без kv — буквально «флаг в events
+// сайта»). Lockdown — kv-флаг acc_lockdown (персист) + запись в журнал
+// каждого сайта с secretary. На паузе Дежурный/Дедлайны не создают
+// событий (проверка SecIsPaused в modules/duty, modules/deadlines),
+// записи проверок продолжаются.
+//
+// Факты платформы (пробы сессии, v0.32.0): json_body() — распарсенное
+// тело POST (request_body() даёт пустой JsonBody — не использовать);
+// respond с недоверенной строкой — HTML_INJECTION (мост redact all);
+// env() из паттерна работает; VM-факты АСС-1.4 (уникальные имена
+// переменных в блоках паттерна, each на верхнем уровне) соблюдены.
+
+import core/store as st
+import core/ledger as lg
+
+pattern SecSend(chat_id: String, text: String) -> String {
+  // шов доставки: прод — Telegram, полигон — mock_sends (см. шапку).
+  // Возвращает "ok" при успехе (и в моке, и в проде), "error: …" при сбое.
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mock = redact(to_string(kv_get("acc_mock_send") == "1"), "hash_only")
+  if mock == REF_TRUE {
+    let gi = grant_issue("db:insert:mock_sends", 60, "unlimited")
+    let _ = db_execute_with_grant(gi, "INSERT INTO mock_sends (ts, text) VALUES (?1, ?2)", [now(), redact(text, "all")])
+    return "ok"
+  }
+  // прод: text — недоверенный производный, мост redact(…, "all")
+  let r = try send_message(chat_id, redact(text, "all"), {bot: "acc"})
+  let NONE = redact("()", "hash_only")
+  let is_err = redact(to_string(r), "hash_only")
+  if is_err == NONE {
+    return "error: send failed"
+  }
+  return "ok"
+}
+
+pattern SecReply(text: String) -> String {
+  // ответ владельцу: chat_id — env (не выводится в ответы и логи)
+  let owner = env_or("ACC_OWNER_TG_ID", "")
+  return SecSend(owner, text)
+}
+
+pattern SecHelp() -> String {
+  return "Команды АСС:\n/status — состояние сайтов\n/site <slug> — детали сайта\n/pause <slug> — пауза событий сайта\n/resume <slug> — снять паузу\n/lockdown — глобальный флаг тревоги\n/unlock — снять lockdown\n/cost — на этапе 1 нет\n/report — на этапе 1 нет"
+}
+
+pattern SecIsPaused(schema: String) -> String {
+  // флаг паузы — последняя запись paused/resumed в events сайта
+  // (буквально «флаг в events сайта», переживает рестарт).
+  // NB: query_row НЕ оборачивается в try — обёртка ломает тип
+  // (урок АСС-1.2, проба сессии: try query_row → [] без данных);
+  // пустой результат — [] (len 0), без ошибки
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = query_row("SELECT kind FROM " + schema + ".events WHERE kind IN ('paused','resumed') ORDER BY id DESC LIMIT 1", [])
+  let n = len(r)
+  if redact(to_string(n < 1.0), "hash_only") == REF_TRUE { return "" }
+  return to_string(get(r, 0.0))
+}
+
+pattern SecKindColor(schema: String, kind: String) -> String {
+  // "" — срок ок; "ЖЁЛТЫЙ (…)" — неизвестен или ≤30 дней
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut seen = 0.0
+  each row in query("SELECT expires FROM " + schema + ".deadlines WHERE kind = ?1 ORDER BY id DESC LIMIT 1", [kind]) {
+    seen = seen + 1.0
+    let exp = to_string(row.expires)
+    let exp_ok = redact(to_string(regex_match("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", exp)), "hash_only")
+    if exp_ok != REF_TRUE {
+      return "ЖЁЛТЫЙ (срок " + kind + " неизвестен)"
+    }
+    let dj = query_scalar("SELECT julianday(?1) - julianday('now')", [exp])
+    let days_left = to_float(to_string(dj))
+    if redact(to_string(days_left <= 30.0), "hash_only") == REF_TRUE {
+      return "ЖЁЛТЫЙ (срок " + kind + " через " + to_string(days_left) + " дн)"
+    }
+  }
+  if redact(to_string(seen < 1.0), "hash_only") == REF_TRUE {
+    return "ЖЁЛТЫЙ (срок " + kind + " неизвестен)"
+  }
+  return ""
+}
+
+pattern SecSiteColor(schema: String) -> String {
+  // цвет сайта (A.2): КРАСНЫЙ — открытый инцидент; ЖЁЛТЫЙ — срок ≤30
+  // дней или неизвестен; ЗЕЛЁНЫЙ — иначе
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let ni = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL", [])
+  let n_inc = to_float(to_string(ni))
+  if redact(to_string(n_inc > 0.0), "hash_only") == REF_TRUE {
+    return "КРАСНЫЙ (открытый инцидент)"
+  }
+  let c1 = SecKindColor(schema, "cert")
+  let c1_hit = redact(to_string(c1 == ""), "hash_only")
+  if c1_hit != REF_TRUE {
+    return c1
+  }
+  let c2 = SecKindColor(schema, "domain")
+  let c2_hit = redact(to_string(c2 == ""), "hash_only")
+  if c2_hit != REF_TRUE {
+    return c2
+  }
+  return "ЗЕЛЁНЫЙ"
+}
+
+pattern SecStatusAll() -> String {
+  // /status: цвет каждого сайта + флаг lockdown
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut rep = ""
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let pr = try parse_json(text)
+      let pr_ok = redact(to_string(pr.ok), "hash_only")
+      if pr_ok == REF_TRUE {
+        let j = pr.value
+        let schema = st.SiteDb(slug)
+        let color = SecSiteColor(schema)
+        rep = rep + color + " " + slug + " (" + to_string(j.url) + ")\n"
+      }
+    }
+  }
+  let lock = redact(to_string(kv_get("acc_lockdown") == "1"), "hash_only")
+  if lock == REF_TRUE {
+    rep = rep + "LOCKDOWN включён\n"
+  }
+  let empty = redact(to_string(rep == ""), "hash_only")
+  if empty == REF_TRUE {
+    return "Сайты не настроены"
+  }
+  return rep
+}
+
+pattern SecSiteDetail(slug: String) -> String {
+  // /site <slug>: последние 5 проверок, открытые инциденты, сроки
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let slug_ok = redact(to_string(regex_match("^[a-z0-9-]{2,32}$", slug)), "hash_only")
+  if slug_ok != REF_TRUE {
+    return "Неверный slug сайта"
+  }
+  let no_dir = redact(to_string(file_exists("data/sites/" + slug + "/passport.json") == false), "hash_only")
+  if no_dir == REF_TRUE {
+    return "Сайт " + slug + " не найден"
+  }
+  let schema = st.SiteDb(slug)
+  let mut rep = "Сайт " + slug + ":\n"
+  // открытые инциденты (до 5)
+  let ni = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL", [])
+  let n_inc = to_float(to_string(ni))
+  rep = rep + "Открытые инциденты: " + to_string(n_inc) + "\n"
+  each row_o in query("SELECT kind, summary FROM " + schema + ".incidents WHERE closed_ts IS NULL ORDER BY id DESC LIMIT 5", []) {
+    rep = rep + "- " + to_string(row_o.kind) + ": " + redact(to_string(row_o.summary), "all") + "\n"
+  }
+  // последние 5 проверок
+  each row_c in query("SELECT url, status, error FROM " + schema + ".health_checks ORDER BY id DESC LIMIT 5", []) {
+    rep = rep + "проверка " + to_string(row_c.url) + " статус " + to_string(row_c.status) + " (" + to_string(row_c.error) + ")\n"
+  }
+  // сроки (последние записи cert/domain)
+  each row_d in query("SELECT kind, expires, source FROM " + schema + ".deadlines WHERE id IN (SELECT MAX(id) FROM " + schema + ".deadlines WHERE kind IN ('cert','domain') GROUP BY kind)", []) {
+    rep = rep + "срок " + to_string(row_d.kind) + ": " + to_string(row_d.expires) + " (источник " + to_string(row_d.source) + ")\n"
+  }
+  return rep
+}
+
+pattern SecHasModule(passport_text: String) -> String {
+  // "secretary", если модуль в паспорте, иначе ""
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let j = parse_json(passport_text)
+  let mods = j.modules
+  each m in mods {
+    if redact(to_string(m == "secretary"), "hash_only") == REF_TRUE {
+      return "secretary"
+    }
+  }
+  return ""
+}
+
+pattern SecJournalAll(action: String, details: String) -> String {
+  // запись в журнал каждого сайта с модулем secretary (глобальные
+  // события: чужой отправитель, lockdown/unlock)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let j = try parse_json(text)
+      let j_ok = redact(to_string(j.ok), "hash_only")
+      if j_ok == REF_TRUE {
+        let pv = j.value
+        let has = redact(to_string(SecHasModule(text) == "secretary"), "hash_only")
+        if has == REF_TRUE {
+          // SiteInit до Journal: холодный старт (site.db ещё не создан) —
+          // таблицы events должны существовать до первой записи
+          let _ = st.SiteInit(slug)
+          let _ = lg.Journal(slug, action, details)
+        }
+      }
+    }
+  }
+  return "ok"
+}
+
+pattern SecSetLockdown(flag: String) -> String {
+  // /lockdown, /unlock: глобальный флаг (kv, персист) + запись в журнал
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let is_on = redact(to_string(flag == "1"), "hash_only")
+  if is_on == REF_TRUE {
+    let _ = kv_set("acc_lockdown", "1")
+    let _ = SecJournalAll("lockdown", "глобальный флаг тревоги включён владельцем")
+    return "LOCKDOWN включён. На этапе 1 изменяющих действий за ним нет — флаг виден в /status."
+  }
+  let _ = kv_delete("acc_lockdown")
+  let _ = SecJournalAll("unlock", "глобальный флаг тревоги снят владельцем")
+  return "Lockdown снят."
+}
+
+pattern SecHandleText(text: String) -> String {
+  // роутер команд (A.2, ТЗ §14). text — недоверенный (из сети):
+  // сравнения — только через hash-барьер, аргументы — redact all.
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // фиксированные команды без аргументов
+  let c_status = redact(to_string(text == "/status"), "hash_only")
+  if c_status == REF_TRUE {
+    return SecStatusAll()
+  }
+  let c_lockdown = redact(to_string(text == "/lockdown"), "hash_only")
+  if c_lockdown == REF_TRUE {
+    return SecSetLockdown("1")
+  }
+  let c_unlock = redact(to_string(text == "/unlock"), "hash_only")
+  if c_unlock == REF_TRUE {
+    return SecSetLockdown("0")
+  }
+  let c_cost = redact(to_string(text == "/cost"), "hash_only")
+  if c_cost == REF_TRUE {
+    return "На этапе 1 нет."
+  }
+  let c_report = redact(to_string(text == "/report"), "hash_only")
+  if c_report == REF_TRUE {
+    return "На этапе 1 нет."
+  }
+  let c_help = redact(to_string(text == "/start"), "hash_only")
+  if c_help == REF_TRUE {
+    return SecHelp()
+  }
+  // команды с аргументом: /site, /pause, /resume <slug>
+  let parts = split(text, " ")
+  let np = len(parts)
+  if redact(to_string(np >= 2.0), "hash_only") == REF_TRUE {
+    let cmd = to_string(get(parts, 0.0))
+    let arg = to_string(get(parts, 1.0))
+    let arg_ok = redact(to_string(regex_match("^[a-z0-9-]{2,32}$", arg)), "hash_only")
+    if arg_ok != REF_TRUE {
+      return "Неверный slug сайта"
+    }
+    let c_site = redact(to_string(cmd == "/site"), "hash_only")
+    if c_site == REF_TRUE {
+      return SecSiteDetail(arg)
+    }
+    let c_pause = redact(to_string(cmd == "/pause"), "hash_only")
+    if c_pause == REF_TRUE {
+      return SecPause(arg)
+    }
+    let c_resume = redact(to_string(cmd == "/resume"), "hash_only")
+    if c_resume == REF_TRUE {
+      return SecResume(arg)
+    }
+  }
+  return SecHelp()
+}
+
+pattern SecPause(slug: String) -> String {
+  // пауза: флаг в events сайта (запись kind=paused); Дежурный и Дедлайны
+  // проверяют SecIsPaused и на паузе событий не создают
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let no_dir = redact(to_string(file_exists("data/sites/" + slug + "/passport.json") == false), "hash_only")
+  if no_dir == REF_TRUE {
+    return "Сайт " + slug + " не найден"
+  }
+  let _ = lg.Journal(slug, "paused", "события сайта на паузе (команда владельца); записи проверок продолжаются")
+  return "Сайт " + slug + " поставлен на паузу: события не создаются, записи проверок продолжаются."
+}
+
+pattern SecResume(slug: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let no_dir = redact(to_string(file_exists("data/sites/" + slug + "/passport.json") == false), "hash_only")
+  if no_dir == REF_TRUE {
+    return "Сайт " + slug + " не найден"
+  }
+  let _ = lg.Journal(slug, "resumed", "пауза снята владельцем")
+  return "Сайт " + slug + " снят с паузы."
+}
+
+pattern SecWebhook() -> String {
+  // вся логика POST /tg; возвращает "<код> <тело>" для respond
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 1) fail-closed: пустые env → 503. env_or: незаданная переменная —
+  //    "" (env() дал бы громкий ENV_NOT_FOUND → 500, а наряд требует 503)
+  let expected = env_or("ACC_TELEGRAM_WEBHOOK_SECRET", "")
+  let sec_empty = redact(to_string(expected == ""), "hash_only")
+  if sec_empty == REF_TRUE {
+    return "503 {\"error\":\"webhook secret not configured\"}"
+  }
+  let owner = env_or("ACC_OWNER_TG_ID", "")
+  let owner_empty = redact(to_string(owner == ""), "hash_only")
+  if owner_empty == REF_TRUE {
+    return "503 {\"error\":\"owner id not configured\"}"
+  }
+  // 2) секрет webhook — ct_eq (без утечки по времени)
+  let hdr = request_header("X-Telegram-Bot-Api-Secret-Token")
+  let eq = ct_eq(redact(to_string(hdr), "all"), redact(to_string(expected), "all"))
+  let eq_ok = redact(to_string(eq), "hash_only")
+  if eq_ok != REF_TRUE {
+    return "403 {\"error\":\"forbidden\"}"
+  }
+  // 3) тело апдейта
+  let b = json_body()
+  let NONE = redact("()", "hash_only")
+  let b_none = redact(to_string(b), "hash_only")
+  if b_none == NONE {
+    return "200 {}"
+  }
+  let has_msg = redact(to_string(has_field(b, "message") == 1.0), "hash_only")
+  if has_msg != REF_TRUE {
+    return "200 {}"
+  }
+  let msg = b.message
+  let has_text = redact(to_string(has_field(msg, "text") == 1.0), "hash_only")
+  if has_text != REF_TRUE {
+    return "200 {}"
+  }
+  let text = to_string(msg.text)
+  let has_from = redact(to_string(has_field(msg, "from") == 1.0), "hash_only")
+  if has_from != REF_TRUE {
+    return "200 {}"
+  }
+  let from = msg.from
+  let has_id = redact(to_string(has_field(from, "id") == 1.0), "hash_only")
+  if has_id != REF_TRUE {
+    return "200 {}"
+  }
+  let uid = to_string(from.id)
+  // 4) только владелец; чужой — молча 200 + журнал без id
+  let is_owner = redact(to_string(uid == owner), "hash_only")
+  if is_owner != REF_TRUE {
+    let _ = SecJournalAll("outsider", "чужой отправитель — команда не исполнена")
+    return "200 {}"
+  }
+  // 5) команда → ответ владельцу
+  let reply = SecHandleText(text)
+  let sent = SecReply(reply)
+  let sent_ok = redact(to_string(sent == "ok"), "hash_only")
+  if sent_ok == REF_TRUE {
+    return "200 {}"
+  }
+  return "200 {}"
+}

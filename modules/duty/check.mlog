@@ -24,6 +24,7 @@
 
 import core/store as st
 import modules/duty/incident as inc
+import modules/secretary/bot as sec_bot
 
 pattern DutyCheckPage(base: String, path: String, expect_text: String) -> String {
   // вердикт страницы: ok | down | no_text | slow. Один GET.
@@ -208,7 +209,14 @@ pattern DutyCheckPassport(slug: String, passport_text: String) -> String {
     failed = failed + 1.0
     fails = fails + hv + "|health|ok\n"
   }
-  let rep = DutyHandleVerdicts(slug, schema, fails, base, health_url)
+  // пауза сайта (наряд АСС-1.5 A.2): записи проверок продолжаются (выше),
+  // события/инциденты не создаются
+  let paused = sec_bot.SecIsPaused(schema)
+  let is_paused = redact(to_string(paused == "paused"), "hash_only")
+  let mut rep = "paused: события не создаются"
+  if is_paused != REF_TRUE {
+    rep = DutyHandleVerdicts(slug, schema, fails, base, health_url)
+  }
   return "duty: checked=" + to_string(checked) + " failed=" + to_string(failed) + " " + rep
 }
 
