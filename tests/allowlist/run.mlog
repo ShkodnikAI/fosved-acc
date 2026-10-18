@@ -20,7 +20,9 @@ import core/store as st
 db { url: "sqlite::memory:" }
 
 pattern QueryDenied() -> Float {
-  let n = query_scalar("SELECT COUNT(*) FROM site_journal.events WHERE kind = 'http_denied'", [])
+  // имя схемы — только через SiteDb (гард A.4.3 АСС-1.2)
+  let schema = st.SiteDb("journal")
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = 'http_denied'", [])
   return to_float(to_string(n))
 }
 
