@@ -78,6 +78,24 @@ jobs:
       - name: Полигон «мёртвой руки» (АСС-1.6 A.3) — 3/3
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
 
+  serve:
+    name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mlog (pinned SHA256)
+        run: |
+          curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
+          echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
+          chmod +x /usr/local/bin/mlog
+      - name: Сценарий 2 под serve — interpreter (блокирующий; Dockerfile AСС-1.7)
+        run: bash tests/serve/duty_serve.sh mlog interpreter
+      - name: "VM: Metalogos-#1336 (ожидаемо красный — сигнал к возврату на VM, ADR-0003)"
+        continue-on-error: true
+        run: |
+          bash tests/serve/duty_serve.sh mlog vm
+          echo "::notice title=VM green::VM: Metalogos-#1336 исправлен? Проверить релиз и вернуть VM (ADR-0003)"
+
   checks:
     name: "Checks: скрипты сроков (юнит с моками сети + smoke)"
     runs-on: ubuntu-24.04
@@ -146,7 +164,7 @@ jobs:
     name: Deploy to Render (hook, ref=SHA)
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [layout, mlog, store, checks, probes, secrets, docker]
+    needs: [layout, mlog, store, serve, checks, probes, secrets, docker]
     steps:
       - name: Деплой по хуку Render (параметр ref=SHA, документация Render — C.1)
         env:
