@@ -83,6 +83,10 @@ jobs:
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
       - name: Mini App — сессии и каркас (АСС-2.2 A.3) — 7/7
         run: bash tests/miniapp/run.sh mlog | tee miniapp.out | grep -q "MINIAPP OK 7/7"
+      - name: Валидация реестров (АСС-2.4 A.1) — файлы репозитория + негативы
+        run: bash tests/registry/check.sh mlog
+      - name: Реестры через Mini App (АСС-2.4 A.3) — 5/5, мок GitHub
+        run: bash tests/registryapi/run.sh mlog | tee registryapi.out | grep -q "REGISTRYAPI OK 5/5"
 
   serve:
     name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"

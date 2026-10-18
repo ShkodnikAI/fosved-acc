@@ -9,6 +9,10 @@ import modules/secretary/bot as bot
 import modules/secretary/deliver as sec
 import modules/miniapp/session as mini
 import core/status as status
+import core/registry as reg
+import core/github_pr as ghpr
+import core/ledger as lg
+import core/store as st
 
 db { url: "sqlite:data/acc.db" }
 
@@ -231,5 +235,154 @@ mlogserver {
       return respond("401 {\"error\":\"unauthorized\"}")
     }
     return respond("200 " + redact(status.StSitesJson(), "all"))
+  }
+
+  // Наряд АСС-2.4 (A.3): реестры — чтение и изменения через PR. Только
+  // владелец (сессия). GET — содержимое зеркала data/registry/ (мост
+  // redact all); POST — собрать новый текст → Validate → 400 | OpenPR →
+  // Journal → {pr_url}. Токен GitHub — только заголовок внутри
+  // github_pr.OpenPR, в ответы/журнал не попадает.
+  route "/api/registry/models" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let text = read_file_or("data/registry/models.json", "[]")
+    return respond("200 " + redact(text, "all"))
+  }
+
+  route "/api/registry/sources" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let text = read_file_or("data/registry/sources.json", "[]")
+    return respond("200 " + redact(text, "all"))
+  }
+
+  route "/api/registry/models" method=POST {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let kind = "models"
+    let text = read_file_or("data/registry/" + kind + ".json", "[]")
+    let b = json_body()
+    let b_none = redact(to_string(b), "hash_only")
+    if b_none == redact("()", "hash_only") {
+      return respond("400 {\"error\":\"нет тела запроса\"}")
+    }
+    let op = to_string(json_get(b, "op", ""))
+    let id = to_string(json_get(b, "id", ""))
+    let entry_s = json_encode(json_get(b, "entry", ""))
+    // правило 8 на ВХОДНОЙ записи (пересборка отбрасывает незнакомые
+    // поля — скан до сборки, чтобы sk-значение в любом поле дало 400)
+    let is_add = redact(to_string(op == "add"), "hash_only")
+    if is_add == redact(to_string(true), "hash_only") {
+      let entry_struct = json_get(b, "entry", "")
+      let scan_err = reg.RegScanEntry(entry_struct, "registry/" + kind + "/entry")
+      let scan_bad = redact(to_string(scan_err != ""), "hash_only")
+      if scan_bad == redact(to_string(true), "hash_only") {
+        return respond("400 " + redact(json_encode({error: scan_err}), "all"))
+      }
+    }
+    let new_text = reg.RegistryNewText(kind, text, op, id, entry_s)
+    let nt_empty = redact(to_string(new_text == ""), "hash_only")
+    if nt_empty == redact(to_string(true), "hash_only") {
+      return respond("400 {\"error\":\"операция не применима (нет записи с id / дубликат id / не валидная entry)\"}")
+    }
+    let verr = reg.ValidateModels(new_text)
+    let verr_empty = redact(to_string(verr == ""), "hash_only")
+    if verr_empty != redact(to_string(true), "hash_only") {
+      return respond("400 " + redact(json_encode({error: verr}), "all"))
+    }
+    let pr = ghpr.OpenPR("registry/" + kind + ".json", new_text, "registry: " + kind + " " + op + " " + id, "Изменение реестра " + kind + " через Mini App (операция: " + op + ", запись: " + id + ").")
+    let pr_err = redact(to_string(starts_with(pr, "error:")), "hash_only")
+    if pr_err == redact(to_string(true), "hash_only") {
+      return respond("502 " + redact(json_encode({error: pr}), "all"))
+    }
+    // SiteInit журнала: CREATE IF NOT EXISTS (Journal делает только ATTACH)
+    let _ = st.SiteInit("journal")
+    let _ = lg.Journal("journal", "registry_pr", kind + " " + op + " " + id + " " + pr)
+    return respond("200 " + redact(json_encode({pr_url: pr}), "all"))
+  }
+
+  route "/api/registry/sources" method=POST {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let kind = "sources"
+    let text = read_file_or("data/registry/" + kind + ".json", "[]")
+    let b = json_body()
+    let b_none = redact(to_string(b), "hash_only")
+    if b_none == redact("()", "hash_only") {
+      return respond("400 {\"error\":\"нет тела запроса\"}")
+    }
+    let op = to_string(json_get(b, "op", ""))
+    let id = to_string(json_get(b, "id", ""))
+    let entry_s = json_encode(json_get(b, "entry", ""))
+    // правило 8 на ВХОДНОЙ записи (пересборка отбрасывает незнакомые
+    // поля — скан до сборки, чтобы sk-значение в любом поле дало 400)
+    let is_add = redact(to_string(op == "add"), "hash_only")
+    if is_add == redact(to_string(true), "hash_only") {
+      let entry_struct = json_get(b, "entry", "")
+      let scan_err = reg.RegScanEntry(entry_struct, "registry/" + kind + "/entry")
+      let scan_bad = redact(to_string(scan_err != ""), "hash_only")
+      if scan_bad == redact(to_string(true), "hash_only") {
+        return respond("400 " + redact(json_encode({error: scan_err}), "all"))
+      }
+    }
+    let new_text = reg.RegistryNewText(kind, text, op, id, entry_s)
+    let nt_empty = redact(to_string(new_text == ""), "hash_only")
+    if nt_empty == redact(to_string(true), "hash_only") {
+      return respond("400 {\"error\":\"операция не применима (нет записи с id / дубликат id / не валидная entry)\"}")
+    }
+    let verr = reg.ValidateSources(new_text)
+    let verr_empty = redact(to_string(verr == ""), "hash_only")
+    if verr_empty != redact(to_string(true), "hash_only") {
+      return respond("400 " + redact(json_encode({error: verr}), "all"))
+    }
+    let pr = ghpr.OpenPR("registry/" + kind + ".json", new_text, "registry: " + kind + " " + op + " " + id, "Изменение реестра " + kind + " через Mini App (операция: " + op + ", запись: " + id + ").")
+    let pr_err = redact(to_string(starts_with(pr, "error:")), "hash_only")
+    if pr_err == redact(to_string(true), "hash_only") {
+      return respond("502 " + redact(json_encode({error: pr}), "all"))
+    }
+    // SiteInit журнала: CREATE IF NOT EXISTS (Journal делает только ATTACH)
+    let _ = st.SiteInit("journal")
+    let _ = lg.Journal("journal", "registry_pr", kind + " " + op + " " + id + " " + pr)
+    return respond("200 " + redact(json_encode({pr_url: pr}), "all"))
   }
 }

@@ -78,3 +78,31 @@ h1 { font-size: 20px; margin: 8px 0 16px; }
 .paused { margin-top: 6px; font-size: 13px; color: #d9a406; }
 .empty { color: var(--muted); padding: 12px 0; }
 #refresh { width: 100%; margin-top: 8px; cursor: pointer; }
+/* АСС-2.4: вкладки «Модели» и «Источники» */
+.reg-card .dot { top: 16px; }
+.ops { display: flex; gap: 6px; margin-top: 8px; }
+.ops .tab { padding: 6px 8px; font-size: 13px; }
+.confirm { margin-top: 6px; font-size: 13px; color: #d9534f; }
+.confirm.hidden { display: none; }
+.reg-add input {
+  display: block; width: 100%; margin: 6px 0; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); font-size: 14px;
+}
+.reg-add .op-add { width: 100%; cursor: pointer; }
+.pr-result { margin-top: 6px; word-break: break-all; }
+.pr-result a { color: var(--accent); }
+/* АСС-2.4: вкладки «Модели» и «Источники» */
+.reg-card .dot { top: 16px; }
+.ops { display: flex; gap: 6px; margin-top: 8px; }
+.ops .tab { padding: 6px 8px; font-size: 13px; }
+.confirm { margin-top: 6px; font-size: 13px; color: #d9534f; }
+.confirm.hidden { display: none; }
+.reg-add input {
+  display: block; width: 100%; margin: 6px 0; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); font-size: 14px;
+}
+.reg-add .op-add { width: 100%; cursor: pointer; }
+.pr-result { margin-top: 6px; word-break: break-all; }
+.pr-result a { color: var(--accent); }

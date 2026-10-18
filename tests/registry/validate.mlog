@@ -1,0 +1,49 @@
+// Валидация реестров репозитория (наряд АСС-2.4, A.1) + негативные
+// фикстуры валидатора. Запуск: bash tests/registry/check.sh (шаг CI).
+// Ожидаемо: REGISTRY VALIDATION OK (positive=2 negative=6)
+import core/registry as reg
+
+db { url: "sqlite::memory:" }
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── позитив: файлы репозитория валидны ──
+  let src = read_file_or("registry/sources.json", "")
+  let e1 = reg.ValidateSources(src)
+  let p1 = redact(to_string(e1 == ""), "hash_only")
+  if p1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let mdl = read_file_or("registry/models.json", "")
+  let e2 = reg.ValidateModels(mdl)
+  let p2 = redact(to_string(e2 == ""), "hash_only")
+  if p2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── негативы: валидатор отклоняет ──
+  let n1 = reg.ValidateSources("[{\"id\":\"bad id\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\"}]")
+  let q1 = redact(to_string(n1 != ""), "hash_only")
+  if q1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n2 = reg.ValidateSources("[{\"id\":\"dup\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\"},{\"id\":\"dup\",\"kind\":\"registry\",\"domain\":\"y.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\"}]")
+  let q2 = redact(to_string(n2 != ""), "hash_only")
+  if q2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n3 = reg.ValidateSources("[{\"id\":\"sch\",\"kind\":\"registry\",\"domain\":\"https://x.example/path\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\"}]")
+  let q3 = redact(to_string(n3 != ""), "hash_only")
+  if q3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n4 = reg.ValidateSources("[{\"id\":\"st\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"paused\"}]")
+  let q4 = redact(to_string(n4 != ""), "hash_only")
+  if q4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n5 = reg.ValidateModels("[{\"id\":\"m1\",\"name\":\"M\",\"provider\":\"p\",\"model\":\"m\",\"key_env\":\"sk-secret-value\",\"status\":\"active\"}]")
+  let q5 = redact(to_string(n5 != ""), "hash_only")
+  if q5 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let n6 = reg.ValidateSources("[{\"id\":\"sk\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\",\"note\":\"sk-abcdef123456\"}]")
+  let q6 = redact(to_string(n6 != ""), "hash_only")
+  if q6 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let mut verdict = "REGISTRY VALIDATION FAIL (positive+negative OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "REGISTRY VALIDATION OK (positive=2 negative=6)"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

@@ -1,0 +1,147 @@
+// PR через GitHub API — Git Data API (наряд АСС-2.4, A.2).
+//
+// OpenPR(path, new_text, title, body) -> String: URL PR или
+// "error: <причина>".
+//
+// NB о платформе: в 0.32.0 нет HTTP PUT/PATCH builtins (REFERENCE: только
+// http_get/http_post/multipart/download), а REST-обновление файла
+// (PUT /contents) требует PUT. Наряд предполагал PUT /contents с base64 —
+// исполняется эквивалент через Git Data API, целиком GET+POST:
+//   1. GET  /git/ref/heads/main        → base_sha
+//   2. GET  /git/commits/{base_sha}    → base_tree_sha
+//   3. POST /git/blobs                 → blob_sha (content = base64(new_text), encoding base64)
+//   4. POST /git/trees {base_tree, tree:[{path, mode 100644, blob}]} → tree_sha
+//   5. POST /git/commits {message, tree, parents:[base_sha]} → commit_sha
+//   6. POST /git/refs {refs/heads/<branch>, commit_sha} — ветка сразу
+//      на новом коммите (родитель — head main) → PR «один коммит»
+//   7. POST /pulls {head, base: main, title, body} → html_url
+// Содержимое файла и ветка — идентичны PUT-пути; тесты проверяют порядок
+// и содержимое вызовов через мок (tests/registryapi/run.sh).
+//
+// Токен — env ACC_GITHUB_TOKEN, только заголовок Authorization: Bearer;
+// в журнал/ответы/ошибки не выводится. Пустой/Err → «error: не настроен
+// ACC_GITHUB_TOKEN» БЕЗ попытки запроса (наряд). База API —
+// ACC_GITHUB_API_BASE (дефолт https://api.github.com; тест — локальный мок).
+// Домен api.github.com — источник реестра (active, terms_checked) —
+// запросы через SafeGetH/SafePost (гард АСС-2.1).
+//
+// Заголовки ответов не читаются (0.32.0) — токен из ответов не утекает;
+// тело ответа GitHub не содержит токен. Журналирование OpenPR — в
+// маршруте (Journal("journal", "registry_pr", kind, op, id, pr_url)) —
+// схема journal (Journal("*") неисполним — StoreDb валидирует slug).
+
+import core/http as http
+
+pattern GhHeaders(token: String) -> Any {
+  // NB: ключи Struct-литерала — [A-Za-z_][A-Za-z0-9_]*, заголовки с дефисом
+  // (X-GitHub-Api-Version) в Struct не выразить; Authorization/Accept достаточно
+  return {Authorization: "Bearer " + token, Accept: "application/vnd.github+json"}
+}
+
+pattern GhField(resp: Any, json_path: String, field: String) -> String {
+  // поле из JSON-ответа по пути глубины ≤2: parse → json_get (офисный рецепт);
+  // Err/отсутствие — ""
+  let text = to_string(resp)
+  let none = redact("()", "hash_only")
+  let is_err = redact(text, "hash_only")
+  if is_err == none {
+    return ""
+  }
+  let p = try parse_json(text)
+  let p_ok = redact(to_string(p.ok), "hash_only")
+  if p_ok != redact(to_string(true), "hash_only") {
+    return ""
+  }
+  let v = p.value
+  // path фиксированной глубины 2: "a.b" | "a"
+  let parts = split(json_path, ".")
+  let np = len(parts)
+  if redact(to_string(to_float(to_string(np)) == 2.0), "hash_only") == redact(to_string(true), "hash_only") {
+    let a = to_string(get(parts, 0.0))
+    let b = to_string(get(parts, 1.0))
+    let sub = json_get(v, a, "")
+    let sub_s = to_string(sub)
+    let sub_empty = redact(to_string(sub_s == ""), "hash_only")
+    if sub_empty == redact(to_string(true), "hash_only") {
+      return ""
+    }
+    return to_string(json_get(sub, b, ""))
+  }
+  return to_string(json_get(v, json_path, ""))
+}
+
+pattern OpenPR(path: String, new_text: String, title: String, body: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 0) токен: пустой/Err → понятная ошибка БЕЗ запроса (наряд A.2)
+  let token = try env_or("ACC_GITHUB_TOKEN", "")
+  let token_s = to_string(token)
+  let no_token = redact(to_string(token_s == "()" or token_s == ""), "hash_only")
+  if no_token == REF_TRUE {
+    return "error: не настроен ACC_GITHUB_TOKEN (docs/runbook/deploy.md, шаг 2)"
+  }
+  let base = try env_or("ACC_GITHUB_API_BASE", "https://api.github.com")
+  let mut base_s = to_string(base)
+  let base_empty = redact(to_string(base_s == "()" or base_s == ""), "hash_only")
+  if base_empty == REF_TRUE {
+    base_s = "https://api.github.com"
+  }
+  let repo = "ShkodnikAI/fosved-acc"
+  let h = GhHeaders(token_s)
+  // 1) head main → base_sha
+  let r1 = try http.SafeGetH(base_s + "/repos/" + repo + "/git/ref/heads/main", h)
+  let base_sha = GhField(r1, "object.sha", "")
+  let sha_ok = redact(to_string(base_sha != ""), "hash_only")
+  if sha_ok != REF_TRUE {
+    return "error: github: не удалось получить head main"
+  }
+  // 2) base commit → base_tree_sha
+  let r2 = try http.SafeGetH(base_s + "/repos/" + repo + "/git/commits/" + base_sha, h)
+  let base_tree = GhField(r2, "tree.sha", "")
+  let tree_ok = redact(to_string(base_tree != ""), "hash_only")
+  if tree_ok != REF_TRUE {
+    return "error: github: не удалось получить base tree"
+  }
+  // 3) blob: content = base64(new_text)
+  let blob_body = json_encode({content: base64_encode(new_text), encoding: "base64"})
+  let r3 = try http.SafePost(base_s + "/repos/" + repo + "/git/blobs", blob_body, h)
+  let blob_sha = GhField(r3, "sha", "")
+  let blob_ok = redact(to_string(blob_sha != ""), "hash_only")
+  if blob_ok != REF_TRUE {
+    return "error: github: blob не создан"
+  }
+  // 4) tree: один файл path → blob
+  let tree_body = json_encode({base_tree: base_tree, tree: [{path: path, mode: "100644", type: "blob", sha: blob_sha}]})
+  let r4 = try http.SafePost(base_s + "/repos/" + repo + "/git/trees", tree_body, h)
+  let new_tree = GhField(r4, "sha", "")
+  let ntree_ok = redact(to_string(new_tree != ""), "hash_only")
+  if ntree_ok != REF_TRUE {
+    return "error: github: tree не создан"
+  }
+  // 5) commit поверх head main
+  let commit_body = json_encode({message: title, tree: new_tree, parents: [base_sha]})
+  let r5 = try http.SafePost(base_s + "/repos/" + repo + "/git/commits", commit_body, h)
+  let commit_sha = GhField(r5, "sha", "")
+  let commit_ok = redact(to_string(commit_sha != ""), "hash_only")
+  if commit_ok != REF_TRUE {
+    return "error: github: commit не создан"
+  }
+  // 6) ветка acc-ui/<path-slug>-<ts> сразу на новом коммите
+  let ts = to_int(now_unix())
+  let branch = "acc-ui/" + replace(replace(path, "/", "-"), ".json", "") + "-" + to_string(ts)
+  let ref_body = json_encode({ref: "refs/heads/" + branch, sha: commit_sha})
+  let r6 = try http.SafePost(base_s + "/repos/" + repo + "/git/refs", ref_body, h)
+  let ref_ref = GhField(r6, "ref", "")
+  let ref_ok = redact(to_string(ref_ref != ""), "hash_only")
+  if ref_ok != REF_TRUE {
+    return "error: github: ветка не создана"
+  }
+  // 7) PR head → main
+  let pr_body = json_encode({title: title, body: body, head: branch, base: "main"})
+  let r7 = try http.SafePost(base_s + "/repos/" + repo + "/pulls", pr_body, h)
+  let pr_url = GhField(r7, "html_url", "")
+  let pr_ok = redact(to_string(pr_url != ""), "hash_only")
+  if pr_ok != REF_TRUE {
+    return "error: github: PR не создан"
+  }
+  return pr_url
+}
