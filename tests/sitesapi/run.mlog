@@ -1,0 +1,79 @@
+// Юниты вкладки «Сайты» (наряд АСС-2.3, A.3 — тесты 2, 3, 4).
+// Запуск: tests/sitesapi/run.sh (готовит фикстуры data/sites/gsite|rsite
+// и данные через tests/sitesapi/fixture.mlog). Ожидаемо: POLYGON sitesapi 8/8.
+//
+//  тест 2: цвета green/red через ОБЩУЮ функцию core/status.mlog —
+//          SecSiteColor (бот, текст /status) и StColorCode (API, код) —
+//          одна и та же логика; строка /status собирается
+//          SecStatusLine(slug, SecSiteColor(slug), url) — те же величины;
+//  тест 3: срок 5 дней → days: 5 (на rsite: у зелёного сроки >30, иначе
+//          цвет был бы жёлтым — см. fixture.mlog);
+//  тест 4: сайт на паузе → paused: true (не-паузный — false).
+//
+// NB (находка АСС-2.3, вне объёма наряда): SecStatusAll в run-режиме
+// (interpreter) теряет строки всех сайтов, кроме первой, при 2+ сайтах
+// (пробы dbg5–dbg10: накопление внутри each→if→if нестабильно от мелких
+// перестановок; StSitesJson/SitesJson-структура — устойчива). На VM
+// (прод, serve) /api/sites верен для обоих фикстурных сайтов; /status на
+// проде с 2+ сайтами требует проверки (см. отчёт наряда #16).
+
+import core/status as status
+import core/store as st
+import core/ledger as lg
+import modules/secretary/bot as bot
+
+db { url: "sqlite:data/acc.db" }
+
+pattern Contains(s: String, sub: String) -> Bool {
+  // NB: REFERENCE пишет Float (1.0/0.0), бинарь 0.32.0 возвращает Bool —
+  // допускаем обе формы (AGENTS §2: код первичен)
+  let cs = to_string(contains(s, sub))
+  return cs == "true" or cs == "1"
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  let g = st.SiteDb("gsite")
+  let r = st.SiteDb("rsite")
+  // ── тест 2: коды API из общей функции цвета ──
+  let c_g = status.StColorCode(g)
+  let t2a = redact(to_string(c_g == "green"), "hash_only")
+  if t2a == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let c_r = status.StColorCode(r)
+  let t2b = redact(to_string(c_r == "red"), "hash_only")
+  if t2b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── тест 2: текст бота из ТОЙ ЖЕ функции цвета ──
+  let b_g = bot.SecSiteColor(g)
+  let t2c = redact(to_string(b_g == "ЗЕЛЁНЫЙ"), "hash_only")
+  if t2c == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let b_r = bot.SecSiteColor(r)
+  let t2d = redact(to_string(b_r == "КРАСНЫЙ (открытый инцидент)"), "hash_only")
+  if t2d == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── тест 2: строка /status из тех же величин (та же функция рендера
+  //    строки, что в SecStatusAll) ──
+  let line = bot.SecStatusLine("gsite", b_g, "https://gsite.example")
+  let t2e = redact(to_string(Contains(line, "ЗЕЛЁНЫЙ gsite")), "hash_only")
+  if t2e == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── тест 3: срок 5 дней → days 5 ──
+  let d5 = status.StDeadlineDays(r, "domain")
+  let t3 = redact(to_string(d5 == 5.0), "hash_only")
+  if t3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── тест 4: пауза ──
+  let p_r = status.StPaused(r)
+  let t4a = redact(to_string(p_r == true), "hash_only")
+  if t4a == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let p_g = status.StPaused(g)
+  let t4b = redact(to_string(p_g == false), "hash_only")
+  if t4b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let mut verdict = "POLYGON sitesapi FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON sitesapi 8/8"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

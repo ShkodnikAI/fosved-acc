@@ -50,3 +50,31 @@ h1 { font-size: 20px; margin: 8px 0 16px; }
 .msg { color: var(--muted); }
 .err { color: #d9534f; }
 .hidden { display: none; }
+/* АСС-2.3: вкладка «Сайты» */
+.site-card { position: relative; padding-left: 26px; }
+.site-card .dot, .dl-dot {
+  position: absolute; left: 10px; top: 16px;
+  width: 10px; height: 10px; border-radius: 50%;
+}
+.site-card.green > .dot { background: #2e9e4f; }
+.site-card.yellow > .dot { background: #d9a406; }
+.site-card.red > .dot { background: #d9534f; }
+.site-card.gray > .dot { background: var(--muted); }
+.site-name { font-weight: 600; }
+.site-url { color: var(--muted); font-size: 13px; word-break: break-all; }
+.checked { font-size: 13px; margin-top: 6px; }
+.checked.err { color: #d9534f; }
+.muted { color: var(--muted); }
+.incident {
+  margin-top: 6px; padding: 6px 8px; border-radius: 8px;
+  background: rgba(217, 83, 79, 0.12); color: #d9534f; font-size: 13px;
+}
+.dl { font-size: 14px; margin-top: 6px; position: relative; padding-left: 14px; }
+.dl-dot { left: 0; top: 8px; width: 7px; height: 7px; position: absolute; }
+.dl-dot.ok { background: #2e9e4f; }
+.dl-dot.yellow { background: #d9a406; }
+.dl-dot.red { background: #d9534f; }
+.dl-dot.gray { background: var(--muted); }
+.paused { margin-top: 6px; font-size: 13px; color: #d9a406; }
+.empty { color: var(--muted); padding: 12px 0; }
+#refresh { width: 100%; margin-top: 8px; cursor: pointer; }

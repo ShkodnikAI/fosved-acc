@@ -8,6 +8,7 @@ import modules/deadlines/run as dl
 import modules/secretary/bot as bot
 import modules/secretary/deliver as sec
 import modules/miniapp/session as mini
+import core/status as status
 
 db { url: "sqlite:data/acc.db" }
 
@@ -208,5 +209,27 @@ mlogserver {
       return respond("200 {\"ok\":true}")
     }
     return respond("401 {\"error\":\"unauthorized\"}")
+  }
+
+  // Наряд АСС-2.3 (A.1): вкладка «Сайты» — данные те же, что у /status
+  // бота: цвет — общая функция core/status.mlog (bot переадресует на неё).
+  // Только чтение, только владелец (сессия АСС-2.2). Данные — через
+  // SiteDb (гард A.4.3 остаётся зелёным). Мост redact(…, "all") —
+  // name/url из паспорта (read_file, недоверенные) не идут в respond
+  // без моста (HTML_INJECTION).
+  route "/api/sites" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    return respond("200 " + redact(status.StSitesJson(), "all"))
   }
 }
