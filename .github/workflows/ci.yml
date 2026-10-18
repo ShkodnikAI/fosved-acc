@@ -81,6 +81,8 @@ jobs:
         run: bash tests/polygon/secretary/run.sh mlog | tee polygon-secretary.out | grep -q "POLYGON secretary 5/5"
       - name: Полигон «мёртвой руки» (АСС-1.6 A.3) — 3/3
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
+      - name: Mini App — сессии и каркас (АСС-2.2 A.3) — 7/7
+        run: bash tests/miniapp/run.sh mlog | tee miniapp.out | grep -q "MINIAPP OK 7/7"
 
   serve:
     name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"

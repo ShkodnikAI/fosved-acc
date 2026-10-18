@@ -29,6 +29,9 @@ COPY checks /app/checks
 # (проверяется CI), зеркало обновляется деплоем.
 COPY sites /app/data/sites
 COPY registry /app/data/registry
+# АСС-2.2 (наряд #15, A.2): статика Mini App — зеркало в data/ (serve-песочница
+# №455 читает только data/); источник истины — modules/miniapp/static/ в репо.
+COPY modules/miniapp/static /app/data/miniapp-static
 RUN mkdir -p /app/data && touch /app/data/.keep && chown -R acc:acc /app/data
 
 USER acc

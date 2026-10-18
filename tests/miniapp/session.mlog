@@ -1,0 +1,54 @@
+// Юниты сессии Mini App (наряд АСС-2.2, A.3 — тест 6 и связка issue→valid).
+// Запуск: tests/miniapp/run.sh (задаёт ACC_SESSION_SECRET для юнитов).
+// Ожидаемо: POLYGON miniapp-session 3/3.
+//
+//  t1: SessionIssue → SessionValid — связка выдачи и проверки (true);
+//  t6a: sig — hex 64 символа (цифры и hex-буквы, 40+ символов) —
+//       «похожий на токен» — сравнивается ВЕРНО (регресс ловушки
+//       Metalogos-#1317: redact(…, "all") маскирует токен-подобные
+//       значения; SessionValid обязан сравнивать через hash_only);
+//  t6b: тот же токен с изменённым последним символом sig — false
+//       (сравнение реально работает, не всегда-true).
+
+import modules/miniapp/session as mini
+
+db { url: "sqlite::memory:" }
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── t1: связка выдача → проверка ──
+  let tok = mini.SessionIssue()
+  let v1 = mini.SessionValid(tok)
+  let t1 = redact(to_string(v1 == true), "hash_only")
+  if t1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── t6a/t6b: токен-подобный sig сравнивается верно ──
+  let parts = split(tok, ".")
+  let exp_s = to_string(get(parts, 0.0))
+  let sig = to_string(get(parts, 1.0))
+  let v6a = mini.SessionValid(exp_s + "." + sig)
+  let t6a = redact(to_string(v6a == true), "hash_only")
+  if t6a == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // подпись с изменённым последним символом (0↔1) — false
+  let n = len(sig)
+  let last = to_string(substring(sig, n - 1.0, n))
+  let mut alt_last = "1"
+  let is_one = redact(to_string(last == "1"), "hash_only")
+  if is_one == REF_TRUE {
+    alt_last = "0"
+  }
+  let sig_bad = substring(sig, 0.0, n - 1.0) + alt_last
+  let v6b = mini.SessionValid(exp_s + "." + sig_bad)
+  let t6b = redact(to_string(v6b == false), "hash_only")
+  if t6b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let mut verdict = "POLYGON miniapp-session FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON miniapp-session 3/3"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

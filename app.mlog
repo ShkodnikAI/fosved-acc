@@ -7,6 +7,7 @@ import modules/duty/schedule as duty
 import modules/deadlines/run as dl
 import modules/secretary/bot as bot
 import modules/secretary/deliver as sec
+import modules/miniapp/session as mini
 
 db { url: "sqlite:data/acc.db" }
 
@@ -126,5 +127,86 @@ mlogserver {
     }
     let report = sec.SecBootstrap()
     return respond("200 " + json_encode({report: report}))
+  }
+
+  // Наряд АСС-2.2 (A.2): каркас Mini App. Вход — по подписанной ссылке от
+  // бота (токен в #-части ссылки, серверу не уходит), сессия — заголовком
+  // X-ACC-Session. Статика — файлы модуля, зеркало data/miniapp-static/
+  // (Dockerfile COPY: serve-песочница №455 читает только data/). Внешних
+  // ресурсов нет — CSP default-src 'self' (security_headers) не нарушается.
+  // Пустой ACC_SESSION_SECRET → 503 «не настроено», никакого открытого
+  // доступа (fail-closed). set_header(resp, name, value) — чистая обёртка
+  // ответа (REFERENCE N7).
+  route "/app" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    // Err (вне allowlist в serve) тоже «не настроено» — fail-closed
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let html = read_file_or("data/miniapp-static/app.html", "")
+    let html_empty = redact(to_string(html == ""), "hash_only")
+    if html_empty == redact(to_string(true), "hash_only") {
+      return respond("500 {\"error\":\"app static missing\"}")
+    }
+    let r = respond_html(redact(html, "all"))
+    let r2 = set_header(r, "Content-Type", "text/html; charset=utf-8")
+    return set_header(r2, "Cache-Control", "no-store")
+  }
+
+  route "/app.js" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    // Err (вне allowlist в serve) тоже «не настроено» — fail-closed
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let js = read_file_or("data/miniapp-static/app.js", "")
+    let js_empty = redact(to_string(js == ""), "hash_only")
+    if js_empty == redact(to_string(true), "hash_only") {
+      return respond("500 {\"error\":\"app static missing\"}")
+    }
+    let r = respond(redact(js, "all"))
+    let r2 = set_header(r, "Content-Type", "application/javascript; charset=utf-8")
+    return set_header(r2, "Cache-Control", "no-store")
+  }
+
+  route "/app.css" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    // Err (вне allowlist в serve) тоже «не настроено» — fail-closed
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let css = read_file_or("data/miniapp-static/app.css", "")
+    let css_empty = redact(to_string(css == ""), "hash_only")
+    if css_empty == redact(to_string(true), "hash_only") {
+      return respond("500 {\"error\":\"app static missing\"}")
+    }
+    let r = respond(redact(css, "all"))
+    let r2 = set_header(r, "Content-Type", "text/css; charset=utf-8")
+    return set_header(r2, "Cache-Control", "no-store")
+  }
+
+  // API-проверка сессии (A.2): заголовок X-ACC-Session → SessionValid
+  // (решения внутри — hash_only-барьеры). Валидна → {"ok":true}, нет → 401.
+  route "/api/whoami" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    // Err (вне allowlist в serve) тоже «не настроено» — fail-closed
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref == redact(to_string(true), "hash_only") {
+      return respond("200 {\"ok\":true}")
+    }
+    return respond("401 {\"error\":\"unauthorized\"}")
   }
 }

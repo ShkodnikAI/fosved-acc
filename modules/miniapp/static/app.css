@@ -1,0 +1,52 @@
+/* АСС Mini App — каркас (наряд АСС-2.2, A.2). Без внешних ресурсов:
+   CSP default-src 'self' (security_headers). Тема — prefers-color-scheme. */
+:root {
+  --bg: #f5f6f8;
+  --fg: #1b1d21;
+  --muted: #6b7280;
+  --card: #ffffff;
+  --accent: #2f6fed;
+  --border: #e3e6ea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12141a;
+    --fg: #e8eaee;
+    --muted: #9aa1ac;
+    --card: #1b1e26;
+    --accent: #6d9bff;
+    --border: #2a2e38;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+}
+main { padding: 16px; max-width: 480px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 8px 0 16px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab {
+  flex: 1;
+  padding: 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 14px;
+}
+.tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.view .card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+.msg { color: var(--muted); }
+.err { color: #d9534f; }
+.hidden { display: none; }
