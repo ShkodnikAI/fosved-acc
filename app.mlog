@@ -21,4 +21,30 @@ mlogserver {
     if status == "ok" then { return respond("200 " + body) }
     return respond("503 " + body)
   }
+
+  // Наряд АСС-1.2 A.3: верификация подписанного журнала.
+  // Токен: в 0.32.0 нет чтения заголовков запроса (request_header в
+  // builtins отсутствует — проверено по src), поэтому токен передаётся
+  // параметром ?token= и сравнивается hash_only с обеих сторон (рецепт
+  // #546 FOSVED-office-v2). Fail-closed: пустой ACC_INTERNAL_TOKEN — 503
+  // «не настроено», не открытый доступ. env() читается только из
+  // METALOGOS_ENV_ALLOWLIST (AGENTS §6).
+  route "/internal/ledger/verify" method=GET {
+    let REF_TRUE = redact(to_string(true), "hash_only")
+    let REF_FALSE = redact(to_string(false), "hash_only")
+    let expected = env("ACC_INTERNAL_TOKEN")
+    if expected == "" then {
+      return respond("503 " + json_encode({error: "internal token not configured"}))
+    }
+    let got = redact(query_param("token"), "all")
+    let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
+    if ok == REF_FALSE then {
+      return respond("401 " + json_encode({error: "unauthorized"}))
+    }
+    // NB: ledger_export возвращает абсолютный safe-path — в ledger_verify
+    // передаём путь литералом (песочница запрещает абсолютные строки).
+    let _ = ledger_export("data/ledger-export.jsonl")
+    let v = ledger_verify("data/ledger-export.jsonl")
+    return respond("200 " + json_encode({ok: v.ok, count: ledger_count()}))
+  }
 }

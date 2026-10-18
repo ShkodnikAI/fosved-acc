@@ -1,0 +1,40 @@
+// Тестовое приложение для A.2 (живучесть ATTACH при serve) — НЕ прод.
+// Запускается tests/store/serve_attach.sh (порт 18441, только localhost).
+// Слаг теста — литерал "t1" (доверенный): ответ маршрута содержит значение
+// из базы, и taint-проверка требует доверенности (эхо query_param в respond
+// запрещено — проба в отчёте наряда).
+//
+// Маршруты:
+//   /w   — SiteDb + SiteInit + INSERT в health_checks; ответ 200 wrote <count>
+//   /r   — чтение COUNT(*) из health_checks; ответ 200 count=<count>
+//   /bad — SiteDb("A") — громкая ошибка regex → 500
+
+import core/store as st
+
+db { url: "sqlite::memory:" }
+
+mlogserver {
+  port: 18441
+  host: "127.0.0.1"
+  middleware: [security_headers]
+
+  route "/w" method=GET {
+    let s = st.SiteDb("t1")
+    let _ = st.SiteInit("t1")
+    let g = grant_issue("db:insert:" + s + ".health_checks", 60, "unlimited")
+    let _ = db_execute_with_grant(g, "INSERT INTO " + s + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), "https://t1.example/health", 200.0, 1.0, 1.0, ""])
+    let c = query_scalar("SELECT COUNT(*) FROM " + s + ".health_checks", [])
+    return respond("200 wrote " + to_string(c))
+  }
+
+  route "/r" method=GET {
+    let s = st.SiteDb("t1")
+    let c = query_scalar("SELECT COUNT(*) FROM " + s + ".health_checks", [])
+    return respond("200 count=" + to_string(c))
+  }
+
+  route "/bad" method=GET {
+    let s = st.SiteDb("A")
+    return respond("200 never " + s)
+  }
+}

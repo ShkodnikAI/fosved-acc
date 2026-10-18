@@ -1,0 +1,29 @@
+// Журнал действий (наряд АСС-1.2, A.3; ТЗ §12).
+//
+// Journal(slug, action, details) — двойная запись:
+//  1. строка в events сайта (полное содержимое — в данных сайта);
+//  2. запись в подписанный журнал (Action Ledger): grant_issue пишет
+//     запись со scope, и хвост scope несёт act=<action> — так действие
+//     попадает в подписанную запись (проба: grant «db:insert:<tbl>:act=X»
+//     покрывает INSERT и оставляет act в записи ledger).
+//
+// Факты проб: grant_issue сам пишет запись в ledger (+1), INSERT/ATTACH по
+// гранту — нет; CREATE по гранту пишет (+1) — поэтому SiteInit даёт 4 записи
+// на процесс, а Journal — ровно одну на вызов.
+//
+// Маршрут GET /internal/ledger/verify — в app.mlog (маршруты объявляются
+// в mlogserver; здесь — только паттерны). Токен маршрута: в 0.32.0 нет
+// чтения заголовков запроса (request_header в builtins отсутствует), токен
+// передаётся параметром ?token= и сравнивается через hash_only с обеих
+// сторон (рецепт #546 FOSVED-office-v2); пустой ACC_INTERNAL_TOKEN — 503,
+// не открытый доступ (fail-closed). env() в маршрутах читается только из
+// METALOGOS_ENV_ALLOWLIST (AGENTS §6).
+
+import core/store as st
+
+pattern Journal(slug: String, action: String, details: String) -> String {
+  let schema = st.SiteDb(slug)
+  let g = grant_issue("db:insert:" + schema + ".events:act=" + action, 60, "unlimited")
+  let _ = db_execute_with_grant(g, "INSERT INTO " + schema + ".events (ts, kind, text) VALUES (?1, ?2, ?3)", [now(), action, details])
+  return "ok"
+}
