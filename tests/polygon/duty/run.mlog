@@ -1,0 +1,98 @@
+// Полигон Дежурного (наряд АСС-1.3, A.4). Запуск: tests/polygon/duty/run.sh
+// (поднимает фейк-сайт 127.0.0.1:18455 и METALOGOS_HTTP_ALLOW_PRIVATE=1 —
+// только в тесте). Ожидаемо: POLYGON duty 5/5.
+//
+// Сценарии (порядок важен для окон хитов фейк-сайта — см. fake_site.py):
+//  1. всё ок — инцидентов 0;
+//  2. разовый сбой /p4 (хит 2), повтор ок — инцидентов 0 (защита от
+//     ложной тревоги: подтверждение через 60 с проходит);
+//  3. /p2 500 дважды подряд (цикл+подтверждение, хиты 3–4) — 1 инцидент down;
+//  4. /p3 200 без контрольного текста (с 4-го хита) — инцидент no_text;
+//  5. инцидент down открыт, две чистые проверки /p2 (хиты 5–6) — закрыт,
+//     есть событие incident_close; no_text остаётся открытым («повторные
+//     сбои того же вида — без новых событий»).
+//
+// Пример строки incidents (сценарий 2) — kind=down, summary=
+// "down /p2 с <epoch> (подтверждено повторной проверкой)".
+
+import modules/duty/check as duty
+
+db { url: "sqlite::memory:" }
+
+pattern OpenCount(schema: String, kind: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL AND kind = ?1", [kind])
+  return to_float(to_string(n))
+}
+
+pattern ClosedCount(schema: String, kind: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NOT NULL AND kind = ?1", [kind])
+  return to_float(to_string(n))
+}
+
+pattern TotalCount(schema: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents", [])
+  return to_float(to_string(n))
+}
+
+pattern EventCount(schema: String, kind: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1", [kind])
+  return to_float(to_string(n))
+}
+
+pattern SampleIncident(schema: String) -> String {
+  // пример строки incidents для отчёта (сценарий 2)
+  let r = query_row("SELECT kind, summary FROM " + schema + ".incidents WHERE kind = 'down' LIMIT 1", [])
+  return "kind=" + to_string(get(r, 0.0)) + " summary=" + redact(to_string(get(r, 1.0)), "all")
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let text = read_file("tests/polygon/duty/passport.json")
+  let schema = "site_pfake"
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── сценарий 1: всё ок — инцидентов 0 ──
+  let r1 = duty.DutyCheckPassport("pfake", text)
+  let t1 = redact(to_string(TotalCount(schema) == 0.0), "hash_only")
+  if t1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── сценарий 2: разовый сбой /p4, повтор ок — инцидентов 0 ──
+  // (проверка /p4 падает, подтверждение через 60 с проходит — 0 инцидентов)
+  let r4 = duty.DutyCheckPassport("pfake", text)
+  let t4 = redact(to_string(TotalCount(schema) == 0.0), "hash_only")
+  if t4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── сценарий 3: /p2 500 дважды подряд — 1 инцидент down ──
+  let r2 = duty.DutyCheckPassport("pfake", text)
+  let t2 = redact(to_string(OpenCount(schema, "down") == 1.0), "hash_only")
+  if t2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── сценарий 4: /p3 без контрольного текста — no_text ──
+  let r3 = duty.DutyCheckPassport("pfake", text)
+  let t3 = redact(to_string(OpenCount(schema, "no_text") == 1.0), "hash_only")
+  if t3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── сценарий 5: две чистые проверки /p2 — down закрыт ──
+  let r5a = duty.DutyCheckPassport("pfake", text)
+  let r5b = duty.DutyCheckPassport("pfake", text)
+  let t5a = redact(to_string(OpenCount(schema, "down") == 0.0), "hash_only")
+  let t5b = redact(to_string(ClosedCount(schema, "down") == 1.0), "hash_only")
+  let t5c = redact(to_string(EventCount(schema, "incident_close") == 1.0), "hash_only")
+  let t5d = redact(to_string(OpenCount(schema, "no_text") == 1.0), "hash_only")
+  // сценарий 5 засчитан, если все четыре условия выполнены
+  let mut s5_ok = 0.0
+  if t5a == REF_TRUE { s5_ok = s5_ok + 1.0 }
+  if t5b == REF_TRUE { s5_ok = s5_ok + 1.0 }
+  if t5c == REF_TRUE { s5_ok = s5_ok + 1.0 }
+  if t5d == REF_TRUE { s5_ok = s5_ok + 1.0 }
+  if redact(to_string(s5_ok == 4.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // отчёт для сдачи: пример строки incidents (сценарий 3)
+  let sample = SampleIncident(schema)
+  print("cyclereps: " + redact(r1, "all") + " // " + redact(r4, "all") + " // " + redact(r2, "all") + " // " + redact(r3, "all") + " // " + redact(r5a, "all") + " // " + redact(r5b, "all"))
+  print("sample incident: " + sample)
+  let mut verdict = "POLYGON duty FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON duty 5/5"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

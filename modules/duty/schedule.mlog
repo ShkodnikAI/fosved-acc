@@ -1,0 +1,119 @@
+// Дежурный — расписание (наряд АСС-1.3, A.3).
+//
+// DutyBootstrap() — идемпотентная регистрация тика Дежурного и одна
+// проверка сразу (ТЗ §15: пропущенные интервалы не догоняются пачкой —
+// одна проверка сразу; cron_add(catch_up="skip")).
+//
+// Ограничение 0.32.0 (документировано в отчёте): cron_add принимает
+// zero-arg таргет (inspect), параметризованных таргетов нет — поэтому
+// ОДНА джоба "duty-tick" (DutyTickAll обходит все паспорта с модулем
+// duty), период — минимум uptime_every_min по таким паспортам (для
+// одного сайта это ровно период из его паспорта). При изменении периода
+// в паспортах джоба пересоздаётся (cron_remove + cron_add).
+//
+// Регистрация вызывается маршрутом /internal/duty/bootstrap (app.mlog,
+// токен ACC_INTERNAL_TOKEN, fail-closed) после старта/деплоя: в 0.32.0
+// нет стартового хука (проба), регистрация «при старте» — вызов
+// bootstrap сразу после старта (как /schedules/bootstrap в офисе).
+
+import modules/duty/check as duty
+
+pattern DutyReadPassport(slug: String) -> String {
+  // текст паспорта сайта из ЗЕРКАЛА data/sites/<slug>/passport.json
+  // или "" (файла нет). Причина зеркала: в serve песочница №455
+  // разрешает файловые чтения только внутри data/ (METALOGOS_DATA_DIR
+  // не переопределяется env в 0.32.0 — проба в отчёте); зеркало
+  // обновляется деплоем (паспорта меняются только через PR → CI →
+  // deploy, источник истины — sites/<slug>/passport.json, его проверяет
+  // CI-джоба Passport validation). read_file_or — явный фолбэк без
+  // try-обёртки (обёртка ломает тип значения для builtins).
+  let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+  if redact(to_string(text == ""), "hash_only") == redact(to_string(true), "hash_only") {
+    return ""
+  }
+  return text
+}
+
+pattern DutyHasModule(passport_text: String) -> String {
+  // "duty", если в modules паспорта есть "duty", иначе ""
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let NONE = redact("()", "hash_only")
+  let j = parse_json(passport_text)
+  let mods = j.modules
+  each m in mods {
+    if redact(to_string(m == "duty"), "hash_only") == REF_TRUE {
+      return "duty"
+    }
+  }
+  return ""
+}
+
+pattern DutyPeriod(passport_text: String) -> Float {
+  // checks.uptime_every_min из паспорта (0 — нет)
+  let NONE = redact("()", "hash_only")
+  let j = parse_json(passport_text)
+  let checks = j.checks
+  return to_float(to_string(checks.uptime_every_min))
+}
+
+pattern DutyTickAll() -> String {
+  // таргет крона: один проход Дежурного по всем паспортам с duty
+  let mut done = 0.0
+  let mut rep = ""
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = DutyReadPassport(slug)
+    if redact(to_string(text == ""), "hash_only") != redact(to_string(true), "hash_only") {
+      let has = DutyHasModule(text)
+      if redact(to_string(has == "duty"), "hash_only") == redact(to_string(true), "hash_only") {
+        rep = rep + slug + ": " + duty.DutyCheckPassport(slug, text) + "\n"
+        done = done + 1.0
+      }
+    }
+  }
+  return "duty tick sites=" + to_string(done) + "\n" + rep
+}
+
+pattern DutyBootstrap() -> String {
+  // идемпотентная регистрация + одна проверка сразу
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // период — минимум uptime_every_min по паспортам с duty
+  let mut period = 0.0
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = DutyReadPassport(slug)
+    if redact(to_string(text == ""), "hash_only") != REF_TRUE {
+      let has = DutyHasModule(text)
+      if redact(to_string(has == "duty"), "hash_only") == REF_TRUE {
+        let p = DutyPeriod(text)
+        if redact(to_string(p > 0.0), "hash_only") == REF_TRUE {
+          if redact(to_string(period <= 0.0 or p < period), "hash_only") == REF_TRUE {
+            period = p
+          }
+        }
+      }
+    }
+  }
+  // идемпотентность: счёт duty-tick-джоб — each на ВЕРХНЕМ уровне
+  // (each внутри if в VM-бэкенде не исполняется — проба в отчёте);
+  // cron_list перед cron_add — дублей не создаём
+  let mut found_n = 0.0
+  each j in cron_list() {
+    if redact(to_string(j.prompt == "duty-tick"), "hash_only") == REF_TRUE {
+      found_n = found_n + 1.0
+    }
+  }
+  let expr = "*/" + to_string(period) + " * * * *"
+  let mut action = "noop"
+  if redact(to_string(period > 0.0), "hash_only") == REF_TRUE {
+    if redact(to_string(found_n >= 1.0), "hash_only") == REF_TRUE {
+      action = "exists"
+    } else {
+      let _ = cron_add(expr, "duty-tick", "Europe/Minsk", "skip")
+      action = "created"
+    }
+  }
+  // одна проверка сразу (ТЗ §15 — без пачки)
+  let run = DutyTickAll()
+  return "bootstrap: period=" + to_string(period) + " action=" + action + "\n" + run
+}

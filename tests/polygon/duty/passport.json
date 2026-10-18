@@ -1,0 +1,33 @@
+{
+  "slug": "pfake",
+  "name": "Полигон Дежурного",
+  "url": "http://127.0.0.1:18455",
+  "languages": ["ru"],
+  "timezone": "Europe/Minsk",
+  "people": {"approver_tg_env": null},
+  "repo": {
+    "github": "ShkodnikAI/fosved-acc",
+    "branch": "main",
+    "deploy": "none",
+    "health_url": "http://127.0.0.1:18455/health",
+    "key_envs": []
+  },
+  "checks": {
+    "uptime_every_min": 5,
+    "daily_at": "07:00",
+    "pages": [
+      {"path": "/p1", "expect_text": "ТЭГА ПЛЮС"},
+      {"path": "/p2", "expect_text": "ТЭГА ПЛЮС"},
+      {"path": "/p3", "expect_text": "ТЭГА ПЛЮС"},
+      {"path": "/p4", "expect_text": "ТЭГА ПЛЮС"}
+    ]
+  },
+  "modules": ["duty"],
+  "limits": {"tokens_per_day": 0, "deploys_per_day": 0},
+  "domain": {"registrar": null, "registrar_panel_url": null, "expires": null, "expires_source": "auto", "autorenew": null, "dns_provider": null, "warn_days": [60, 30, 7], "renewal_owner": "owner"},
+  "profile": "showcase",
+  "participation": "report_only",
+  "platform": {"adapter": "render", "cdn": null},
+  "models": {"policy": "router", "allow": [], "deny": [], "tokens_per_day": 0},
+  "sources": []
+}

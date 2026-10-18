@@ -16,6 +16,14 @@ RUN apt-get update \
 RUN useradd --system --create-home --home-dir /app acc
 WORKDIR /app
 COPY app.mlog /app/app.mlog
+# АСС-1.3: импорты модулей (core/store, core/ledger, modules/duty/*)
+COPY core /app/core
+COPY modules /app/modules
+# Зеркало паспортов и реестра В data/: песочница serve №455 разрешает
+# файловые чтения только внутри data/; источник истины — sites/ в репо
+# (проверяется CI), зеркало обновляется деплоем.
+COPY sites /app/data/sites
+COPY registry /app/data/registry
 RUN mkdir -p /app/data && touch /app/data/.keep && chown -R acc:acc /app/data
 
 USER acc

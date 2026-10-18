@@ -67,6 +67,8 @@ jobs:
         run: ./scripts/check_store_access.sh
       - name: Живучесть ATTACH при serve (A.2) — 50 посл. + 20 парал.
         run: bash tests/store/serve_attach.sh mlog
+      - name: Полигон Дежурного (АСС-1.3 A.4) — 5/5
+        run: bash tests/polygon/duty/run.sh mlog | tee polygon.out | grep -q "POLYGON duty 5/5"
 
   probes:
     name: Probes Metalogos (АСС-0, блок B)
