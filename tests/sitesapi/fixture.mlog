@@ -1,0 +1,29 @@
+import core/store as st
+import core/ledger as lg
+
+db { url: "sqlite:data/acc.db" }
+
+pattern Main1(_: String) -> String {
+  let _ = st.SiteInit("gsite")
+  let g = st.SiteDb("gsite")
+  let g1 = grant_issue("db:insert:" + g + ".health_checks", 60, "unlimited")
+  let _ = db_execute_with_grant(g1, "INSERT INTO " + g + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now() - 60.0, "https://gsite.example/", 200.0, 12.0, 1.0, "ok"])
+  let g2 = grant_issue("db:insert:" + g + ".deadlines", 60, "unlimited")
+  let _ = db_execute_with_grant(g2, "INSERT INTO " + g + ".deadlines (kind, subject, expires, source, checked_ts) VALUES ('domain', 'gsite.example', date('now', '+61 day'), 'rdap', ?1)", [now()])
+  let g3 = grant_issue("db:insert:" + g + ".deadlines", 60, "unlimited")
+  let _ = db_execute_with_grant(g3, "INSERT INTO " + g + ".deadlines (kind, subject, expires, source, checked_ts) VALUES ('cert', 'gsite.example', date('now', '+62 day'), 'rdap', ?1)", [now()])
+  let _ = st.SiteInit("rsite")
+  let r = st.SiteDb("rsite")
+  let r1 = grant_issue("db:insert:" + r + ".health_checks", 60, "unlimited")
+  let _ = db_execute_with_grant(r1, "INSERT INTO " + r + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now() - 120.0, "https://rsite.example/", 0.0, 8.0, 0.0, "down"])
+  let r2 = grant_issue("db:insert:" + r + ".incidents", 60, "unlimited")
+  let _ = db_execute_with_grant(r2, "INSERT INTO " + r + ".incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, 'down', 'down / тест', NULL)", [now() - 120.0])
+  let r3 = grant_issue("db:insert:" + r + ".deadlines", 60, "unlimited")
+  let _ = db_execute_with_grant(r3, "INSERT INTO " + r + ".deadlines (kind, subject, expires, source, checked_ts) VALUES ('domain', 'rsite.example', date('now', '+5 day'), 'rdap', ?1)", [now()])
+  let _ = lg.Journal("rsite", "paused", "фикстура юнита: сайт на паузе")
+  return "fixtures ok"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

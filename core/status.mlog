@@ -1,0 +1,237 @@
+// Статусы сайтов — ОБЩАЯ логика для бота (/status, АСС-1.5) и API
+// (вкладка «Сайты» Mini App, АСС-2.3; наряд #16: «цвет не вычислять
+// заново: брать ту же функцию, что у /status»).
+//
+// Перенос из modules/secretary/bot.mlog (АСС-1.5 A.2) с переадресацией:
+// bot.SecKindColor/SecSiteColor/SecIsPaused вызывают St* — и бот, и API
+// используют одни и те же функции.
+//
+// Цвет: КРАСНЫЙ — открытый инцидент; ЖЁЛТЫЙ — срок ≤30 дней или
+// неизвестен; ЗЕЛЁНЫЙ — иначе. Тексты — те же, что в /status бота.
+// StColorCode — код для API: green | yellow | red (та же логика цвета).
+//
+// Пауза сайта — последняя запись paused/resumed в events (АСС-1.5 A.2).
+//
+// Сроки: последние записи deadlines по kind (cert/domain, АСС-1.4);
+// нет записи — "" (expires) / -1.0 (days) / "" (source) = «нет данных».
+// Дни — CAST(julianday(expires) − julianday('now') AS INTEGER); expires
+// не дата (NULL) → to_float("()") → Err — обёрнуто try → -1.0.
+//
+// Данные — только через SiteDb(slug) (гард A.4.3 АСС-1.2 остаётся
+// зелёным: имя схемы нигде не пишется литералом).
+
+import core/store as st
+
+pattern StIsPaused(schema: String) -> String {
+  // "paused" — последняя запись events paused; иначе "" (АСС-1.5 A.2)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = query_row("SELECT kind FROM " + schema + ".events WHERE kind IN ('paused','resumed') ORDER BY id DESC LIMIT 1", [])
+  let n = len(r)
+  if redact(to_string(n < 1.0), "hash_only") == REF_TRUE { return "" }
+  return to_string(get(r, 0.0))
+}
+
+pattern StPaused(schema: String) -> Bool {
+  return StIsPaused(schema) == "paused"
+}
+
+pattern StKindColor(schema: String, kind: String) -> String {
+  // "" — срок ок; "ЖЁЛТЫЙ (…)" — неизвестен или ≤30 дней (текст /status)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut seen = 0.0
+  each row in query("SELECT expires FROM " + schema + ".deadlines WHERE kind = ?1 ORDER BY id DESC LIMIT 1", [kind]) {
+    seen = seen + 1.0
+    let exp = to_string(row.expires)
+    let exp_ok = redact(to_string(regex_match("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", exp)), "hash_only")
+    if exp_ok != REF_TRUE {
+      return "ЖЁЛТЫЙ (срок " + kind + " неизвестен)"
+    }
+    let dj = query_scalar("SELECT julianday(?1) - julianday('now')", [exp])
+    let days_left = to_float(to_string(dj))
+    if redact(to_string(days_left <= 30.0), "hash_only") == REF_TRUE {
+      return "ЖЁЛТЫЙ (срок " + kind + " через " + to_string(days_left) + " дн)"
+    }
+  }
+  if redact(to_string(seen < 1.0), "hash_only") == REF_TRUE {
+    return "ЖЁЛТЫЙ (срок " + kind + " неизвестен)"
+  }
+  return ""
+}
+
+pattern StSiteColor(schema: String) -> String {
+  // цвет сайта (текст /status): КРАСНЫЙ/ЖЁЛТЫЙ/ЗЕЛЁНЫЙ — АСС-1.5 A.2
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let ni = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL", [])
+  let n_inc = to_float(to_string(ni))
+  if redact(to_string(n_inc > 0.0), "hash_only") == REF_TRUE {
+    return "КРАСНЫЙ (открытый инцидент)"
+  }
+  let c1 = StKindColor(schema, "cert")
+  let c1_hit = redact(to_string(c1 == ""), "hash_only")
+  if c1_hit != REF_TRUE {
+    return c1
+  }
+  let c2 = StKindColor(schema, "domain")
+  let c2_hit = redact(to_string(c2 == ""), "hash_only")
+  if c2_hit != REF_TRUE {
+    return c2
+  }
+  return "ЗЕЛЁНЫЙ"
+}
+
+pattern StColorCode(schema: String) -> String {
+  // код цвета для API (АСС-2.3): та же функция цвета, только кодом
+  let color = StSiteColor(schema)
+  let is_green = redact(to_string(color == "ЗЕЛЁНЫЙ"), "hash_only")
+  if is_green == redact(to_string(true), "hash_only") {
+    return "green"
+  }
+  let is_red = redact(to_string(starts_with(color, "КРАСНЫЙ")), "hash_only")
+  if is_red == redact(to_string(true), "hash_only") {
+    return "red"
+  }
+  return "yellow"
+}
+
+pattern StDeadlineExpires(schema: String, kind: String) -> String {
+  // expires последней записи ("" — нет данных)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = query_row("SELECT expires FROM " + schema + ".deadlines WHERE kind = ?1 ORDER BY id DESC LIMIT 1", [kind])
+  let n = len(r)
+  if redact(to_string(n < 1.0), "hash_only") == REF_TRUE {
+    return ""
+  }
+  return to_string(get(r, 0.0))
+}
+
+pattern StDeadlineDays(schema: String, kind: String) -> Float {
+  // дней до истечения (-1.0 — нет данных/не дата)
+  let exp = StDeadlineExpires(schema, kind)
+  let empty = redact(to_string(exp == ""), "hash_only")
+  if empty == redact(to_string(true), "hash_only") {
+    return -1.0
+  }
+  let d = try to_float(to_string(query_scalar("SELECT CAST(julianday(date(?1)) - julianday(date('now')) AS INTEGER)", [exp])))
+  let none = redact("()", "hash_only")
+  let d_err = redact(to_string(d), "hash_only")
+  if d_err == none {
+    return -1.0
+  }
+  return to_float(to_string(d))
+}
+
+pattern StDeadlineSource(schema: String, kind: String) -> String {
+  // source последней записи ("" — нет данных)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = query_row("SELECT source FROM " + schema + ".deadlines WHERE kind = ?1 ORDER BY id DESC LIMIT 1", [kind])
+  let n = len(r)
+  if redact(to_string(n < 1.0), "hash_only") == REF_TRUE {
+    return ""
+  }
+  return to_string(get(r, 0.0))
+}
+
+pattern StDeadlineJson(schema: String, kind: String) -> String {
+  // {"expires":…,"days":…,"source":…}; нет данных — null (АСС-2.3 A.1)
+  let exp = StDeadlineExpires(schema, kind)
+  let days = StDeadlineDays(schema, kind)
+  let src = StDeadlineSource(schema, kind)
+  let exp_empty = redact(to_string(exp == ""), "hash_only")
+  let mut exp_json = "\"" + exp + "\""
+  if exp_empty == redact(to_string(true), "hash_only") {
+    exp_json = "null"
+  }
+  let mut days_json = to_string(days)
+  let no_days = redact(to_string(days < 0.0), "hash_only")
+  if no_days == redact(to_string(true), "hash_only") {
+    days_json = "null"
+  }
+  let src_empty = redact(to_string(src == ""), "hash_only")
+  let mut src_json = "\"" + src + "\""
+  if src_empty == redact(to_string(true), "hash_only") {
+    src_json = "null"
+  }
+  return "{\"expires\":" + exp_json + ",\"days\":" + days_json + ",\"source\":" + src_json + "}"
+}
+
+pattern StDeadlinesJson(schema: String) -> String {
+  return "{\"domain\":" + StDeadlineJson(schema, "domain") + ",\"cert\":" + StDeadlineJson(schema, "cert") + "}"
+}
+
+pattern StLastCheckJson(schema: String) -> String {
+  // последняя запись health_checks: {"ts":…,"ok":bool,"ms":…} или null
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = query_row("SELECT ts, status, ms FROM " + schema + ".health_checks ORDER BY id DESC LIMIT 1", [])
+  let n = len(r)
+  if redact(to_string(n < 1.0), "hash_only") == REF_TRUE {
+    return "null"
+  }
+  let ts = to_string(get(r, 0.0))
+  let status = to_float(to_string(get(r, 1.0)))
+  let ms = to_string(get(r, 2.0))
+  let mut ok_flag = "false"
+  let ok200 = redact(to_string(status == 200.0), "hash_only")
+  if ok200 == REF_TRUE {
+    ok_flag = "true"
+  }
+  return "{\"ts\":\"" + ts + "\",\"ok\":" + ok_flag + ",\"ms\":" + ms + "}"
+}
+
+pattern StOpenIncidentsJson(schema: String) -> String {
+  // открытые инциденты: [{"kind":…,"since":…},…] или []
+  let mut acc = ""
+  each row in query("SELECT kind, opened_ts FROM " + schema + ".incidents WHERE closed_ts IS NULL ORDER BY id DESC", []) {
+    acc = acc + "{\"kind\":\"" + to_string(row.kind) + "\",\"since\":" + to_string(row.opened_ts) + "},"
+  }
+  let empty = redact(to_string(acc == ""), "hash_only")
+  if empty == redact(to_string(true), "hash_only") {
+    return "[]"
+  }
+  // срез запятой-хвоста
+  let n = len(acc)
+  return "[" + substring(acc, 0.0, n - 1.0) + "]"
+}
+
+pattern StSiteJson(slug: String, name: String, url: String) -> String {
+  // объект сайта для /api/sites (АСС-2.3 A.1); schema — через SiteDb
+  let schema = st.SiteDb(slug)
+  let color = StColorCode(schema)
+  let mut paused_json = "false"
+  let paused = StPaused(schema)
+  let is_paused = redact(to_string(paused == true), "hash_only")
+  if is_paused == redact(to_string(true), "hash_only") {
+    paused_json = "true"
+  }
+  return "{\"slug\":\"" + slug + "\",\"name\":\"" + name + "\",\"url\":\"" + url + "\",\"color\":\"" + color + "\",\"paused\":" + paused_json + ",\"last_check\":" + StLastCheckJson(schema) + ",\"open_incidents\":" + StOpenIncidentsJson(schema) + ",\"deadlines\":" + StDeadlinesJson(schema) + "}"
+}
+
+pattern StSitesJson() -> String {
+  // массив сайтов: passports из ЗЕРКАЛА data/sites/ (АСС-2.3 A.1);
+  // битый паспорт — сайт пропускается (как в /status бота)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut acc = ""
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let j = try parse_json(text)
+      let j_ok = redact(to_string(j.ok), "hash_only")
+      if j_ok == REF_TRUE {
+        let p = j.value
+        let name = to_string(p.name)
+        let url = to_string(p.url)
+        // SiteInit: холодный старт — таблицы должны существовать
+        let _ = st.SiteInit(slug)
+        acc = acc + StSiteJson(slug, name, url) + ","
+      }
+    }
+  }
+  let empty = redact(to_string(acc == ""), "hash_only")
+  if empty == redact(to_string(true), "hash_only") {
+    return "[]"
+  }
+  // срез запятой-хвоста
+  let n = len(acc)
+  return "[" + substring(acc, 0.0, n - 1.0) + "]"
+}
