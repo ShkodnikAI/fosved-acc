@@ -69,6 +69,20 @@ jobs:
         run: bash tests/store/serve_attach.sh mlog
       - name: Полигон Дежурного (АСС-1.3 A.4) — 5/5
         run: bash tests/polygon/duty/run.sh mlog | tee polygon.out | grep -q "POLYGON duty 5/5"
+      - name: Гард exec (АСС-1.4 A.2) — exec только в modules/deadlines/run.mlog
+        run: ./scripts/check_exec.sh
+      - name: Полигон Дедлайнов (АСС-1.4 A.4) — 5/5
+        run: bash tests/polygon/deadlines/run.sh mlog | tee polygon-deadlines.out | grep -q "POLYGON deadlines 5/5"
+
+  checks:
+    name: "Checks: скрипты сроков (юнит с моками сети + smoke)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Юнит-тесты скриптов checks/ (АСС-1.4 A.1, моки сети)
+        run: python3 -m unittest discover -s tests/checks -v
+      - name: Smoke — cert_expiry.py example.com даёт валидный JSON (АСС-1.4 A.1)
+        run: python3 checks/cert_expiry.py example.com | tee cert.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['domain']=='example.com', d; print('smoke cert ok:', d['expires'])"
 
   probes:
     name: Probes Metalogos (АСС-0, блок B)
@@ -123,7 +137,7 @@ jobs:
           echo "$body" | grep -q '"status":"ok"'
 
   research:
-    name: Research АСС-0 (C.2, C.3 — информационный, не блокирует мерж)
+    name: Research АСС-0 (C.2) + АСС-1.4 A.5 (информационный, не блокирует мерж)
     runs-on: ubuntu-24.04
     # Информационная джоба: внешние сайты могут быть недоступны с раннера.
     # Результат читается в логе, на мерж не влияет (не проверка качества кода).
@@ -131,7 +145,12 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: C.3 — срок регистрации домена (RDAP/WHOIS, без персональных данных)
-        run: python3 scripts/research/domain_expiry.py tega.plus pravo.by | tee c3.txt; grep '^- ' c3.txt | head -10 | while IFS= read -r l; do echo "::notice title=C.3::$l"; done
+      - name: A.5 (АСС-1.4) — срок сертификата и домена tega.plus / pravo.by (checks/, без персональных данных)
+        run: |
+          python3 checks/cert_expiry.py tega.plus | tee -a a5.txt
+          python3 checks/domain_expiry.py tega.plus | tee -a a5.txt
+          python3 checks/cert_expiry.py pravo.by | tee -a a5.txt
+          python3 checks/domain_expiry.py pravo.by | tee -a a5.txt
+          grep -E '^\{' a5.txt | while IFS= read -r l; do echo "::notice title=A.5::$l"; done
       - name: C.2 — ленты pravo.by и tnpa.by
         run: ./scripts/research/legal_feeds.sh | tee c2.txt; grep -v '^    ' c2.txt | head -10 | while IFS= read -r l; do echo "::notice title=C.2::$l"; done

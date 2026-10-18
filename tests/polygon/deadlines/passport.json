@@ -1,0 +1,27 @@
+{
+  "slug": "dlfake",
+  "name": "DL Fake (полигон АСС-1.4)",
+  "url": "https://dlfake.test",
+  "timezone": "Europe/Minsk",
+  "checks": {
+    "uptime_every_min": 5,
+    "daily_at": "07:00",
+    "pages": []
+  },
+  "modules": ["deadlines"],
+  "domain": {
+    "registrar": null,
+    "registrar_panel_url": null,
+    "expires": "2030-01-01",
+    "expires_source": "manual",
+    "autorenew": null,
+    "dns_provider": null,
+    "warn_days": [60, 30, 7],
+    "renewal_owner": "owner"
+  },
+  "profile": "showcase",
+  "participation": "pr_with_approval",
+  "platform": {"adapter": "render", "cdn": null},
+  "models": {"policy": "router", "allow": [], "deny": [], "tokens_per_day": 0},
+  "sources": []
+}

@@ -1,0 +1,97 @@
+// Полигон Дедлайнов (наряд АСС-1.4, A.4). Запуск: tests/polygon/deadlines/run.sh
+// (поднимает отдельное дерево с фикстурами вместо сети и
+// METALOGOS_ALLOW_EXEC=1 — exec в run-режиме; продуктовые файлы не трогаются).
+// Ожидаемо: POLYGON deadlines 5/5.
+//
+// Задачи (вызов dl.RunCheck("domain", …), фикстура по счётчику вызовов):
+//  1. срок через 90 дней — событий нет;
+//  2. через 30 — один deadline_warn (порог 30); повторный прогон — ноль новых;
+//  3. через 5 — deadline_warn (порог 7); дублей по порогам 60/30 нет;
+//  4. expires=null и ручное поле задано — запись deadlines source=manual,
+//     deadline_unknown нет;
+//  5. домен не из паспорта — отказ БЕЗ exec (фикстура не вызывалась:
+//     счётчик остался 5, в логе вызовов нет other.test).
+//
+// По A.3 каждый порог даёт своё событие: при остатке 29.6 дн срабатывают
+// и порог 60, и порог 30 (задача 2 проверяет именно «порог 30» — один).
+
+import modules/deadlines/run as dl
+
+db { url: "sqlite::memory:" }
+
+pattern WarnLike(schema: String, pat: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = 'deadline_warn' AND text LIKE ?1", [pat])
+  return to_float(to_string(n))
+}
+
+pattern EventCount(schema: String, kind: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1", [kind])
+  return to_float(to_string(n))
+}
+
+pattern ManualRows(schema: String) -> Float {
+  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".deadlines WHERE source = 'manual' AND expires = '2030-01-01'", [])
+  return to_float(to_string(n))
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let schema = "site_dlfake"
+  let mut ok = 0.0
+  let mut fail = 0.0
+  // ── задача 1: срок +90 дней — событий нет ──
+  let r1 = dl.RunCheck("domain", "dlfake.test")
+  let t1 = redact(to_string(EventCount(schema, "deadline_warn") == 0.0), "hash_only")
+  if t1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── задача 2: срок +30 — один deadline_warn (порог 30) ──
+  let r2 = dl.RunCheck("domain", "dlfake.test")
+  let t2 = redact(to_string(WarnLike(schema, "%порог 30,%") == 1.0), "hash_only")
+  if t2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── задача 2 (повторный прогон): ноль новых ──
+  let r3 = dl.RunCheck("domain", "dlfake.test")
+  let t2b = redact(to_string(WarnLike(schema, "%порог 30,%") == 1.0), "hash_only")
+  if t2b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── задача 3: срок +5 — deadline_warn (порог 7); дублей 60/30 нет ──
+  let r4 = dl.RunCheck("domain", "dlfake.test")
+  let t3a = redact(to_string(WarnLike(schema, "%порог 7,%") == 1.0), "hash_only")
+  let t3b = redact(to_string(WarnLike(schema, "%порог 30,%") == 1.0), "hash_only")
+  let t3c = redact(to_string(WarnLike(schema, "%порог 60,%") == 1.0), "hash_only")
+  let mut s3 = 0.0
+  if t3a == REF_TRUE { s3 = s3 + 1.0 }
+  if t3b == REF_TRUE { s3 = s3 + 1.0 }
+  if t3c == REF_TRUE { s3 = s3 + 1.0 }
+  if redact(to_string(s3 == 3.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── задача 4: expires=null, ручное поле задано — source=manual ──
+  let r5 = dl.RunCheck("domain", "dlfake.test")
+  let t4a = redact(to_string(ManualRows(schema) == 1.0), "hash_only")
+  let t4b = redact(to_string(EventCount(schema, "deadline_unknown") == 0.0), "hash_only")
+  let t4c = redact(to_string(contains(r5, "manual")), "hash_only")
+  let mut s4 = 0.0
+  if t4a == REF_TRUE { s4 = s4 + 1.0 }
+  if t4b == REF_TRUE { s4 = s4 + 1.0 }
+  if t4c == REF_TRUE { s4 = s4 + 1.0 }
+  if redact(to_string(s4 == 3.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // ── задача 5: чужой домен — отказ без exec ──
+  let r6 = dl.RunCheck("domain", "other.test")
+  let t5a = redact(to_string(contains(r6, "refused")), "hash_only")
+  let calls = read_file_or("data/dl_calls.txt", "")
+  let t5b = redact(to_string(contains(calls, "other.test") == false), "hash_only")
+  let state = read_file_or("data/dl_state", "")
+  let t5c = redact(to_string(state == "5"), "hash_only")
+  let mut s5 = 0.0
+  if t5a == REF_TRUE { s5 = s5 + 1.0 }
+  if t5b == REF_TRUE { s5 = s5 + 1.0 }
+  if t5c == REF_TRUE { s5 = s5 + 1.0 }
+  if redact(to_string(s5 == 3.0), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // отчёт для сдачи: вердикты вызовов
+  print("cyclereps: " + redact(r1, "all") + " // " + redact(r2, "all") + " // " + redact(r3, "all") + " // " + redact(r4, "all") + " // " + redact(r5, "all") + " // " + redact(r6, "all"))
+  let mut verdict = "POLYGON deadlines FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON deadlines 5/5"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}
