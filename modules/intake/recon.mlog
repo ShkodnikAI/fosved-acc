@@ -1,0 +1,383 @@
+// Приём сайта — разведка только на чтение (наряд АСС-2.5, A.1; ТЗ §5
+// шаги 1–2). Команда боту «прими сайт https://…» (только владелец):
+// АСС читает публичное и собирает ЧЕРНОВИК паспорта. Найденное — в
+// found_auto; неизвестное — null (запрет угадывания). Черновик —
+// таблица intake_drafts в data/acc.db (общая база АСС, не база сайта).
+// Ничего не пишется в репозиторий и sites/ (запрет наряда).
+//
+// HTTP — только через SafeGet (АСС-2.1). Домен заявки на время разведки
+// добавляется во ВРЕМЕННЫЙ список разрешённых (HttpAllowed, core/
+// allowlist.mlog): только этот хост, срок 10 минут, с записью в журнал
+// (Journal("journal", "intake_allow", …)).
+//
+// Платформенные факты (REFERENCE 0.32.0 + пробы АСС-2.5): regex_captures
+// возвращает [полное совпадение, группа1, …] ПЕРВОГО совпадения;
+// index_of(s, needle) → позиция или -1; base64/json_get — есть; null-
+// литерала в mlog нет — null в JSON-черновике пишется текстом; заголовки
+// ОТВЕТА не читаются (platform.adapter — всегда null, не угадывать).
+// Рекурсивные паттерны на VM ненадёжны (находка АСС-2.4: ScanSecrets) —
+// обход ссылок не рекурсивный: each по фиксированному списку шагов со
+// «строкой-состоянием» через паттерн IntakeLinkStep (разделитель US).
+
+import core/http as http
+import core/allowlist as aw
+import core/ledger as lg
+import core/passport as pp
+import core/store as st
+
+
+pattern IntakeHost(url: String) -> String {
+  return aw.HostOf(url)
+}
+
+pattern IntakeAllowDomain(url: String) -> String {
+  // временное разрешение домена: kv acc_http_tmp:<host> = exp (10 мин)
+  let host = aw.HostOf(url)
+  let exp = to_int(now_unix()) + 600
+  let _ = kv_set("acc_http_tmp:" + host, to_string(exp))
+  // SiteInit журнала: CREATE IF NOT EXISTS events (Journal — только ATTACH)
+  let _ = st.SiteInit("journal")
+  let _ = lg.Journal("journal", "intake_allow", host + " до (unix) " + to_string(exp) + " (10 минут, только разведка)")
+  return host
+}
+
+pattern IntakeTitle(html: String) -> String {
+  let caps = regex_captures("(?s)<title[^>]*>(.*?)</title>", html)
+  let n = len(caps)
+  if redact(to_string(to_float(to_string(n)) >= 2.0), "hash_only") == redact(to_string(true), "hash_only") {
+    return to_string(get(caps, 1.0))
+  }
+  return ""
+}
+
+pattern IntakePageLang(html: String) -> String {
+  let caps = regex_captures("<html[^>]*lang=\"([a-z-]+)\"", html)
+  let n = len(caps)
+  if redact(to_string(to_float(to_string(n)) >= 2.0), "hash_only") == redact(to_string(true), "hash_only") {
+    return to_string(get(caps, 1.0))
+  }
+  return ""
+}
+
+pattern IntakeGithub(html: String) -> String {
+  // github.com/<owner>/<repo> на главной; иначе "" (null в черновике)
+  let caps = regex_captures("github\\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", html)
+  let n = len(caps)
+  if redact(to_string(to_float(to_string(n)) >= 2.0), "hash_only") == redact(to_string(true), "hash_only") {
+    return to_string(get(caps, 1.0))
+  }
+  return ""
+}
+
+pattern US() -> String {
+  // разделитель полей IntakeLinkStep
+  return "\u0001"
+}
+
+pattern IntakeLinkStep(rest: String) -> String {
+  // одна итерация обхода ссылок: "none" | "href" + US + "text" + US + rest.
+  // Ищет первый <a href="…">…</a> с pos=index_of; фрагмент — до </a>.
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let pos = index_of(rest, "<a ")
+  let has = redact(to_string(to_float(to_string(pos)) >= 0.0), "hash_only")
+  if has != REF_TRUE {
+    return "none"
+  }
+  let p = to_float(to_string(pos))
+  let close = index_of(rest, "</a>")
+  let close_ok = redact(to_string(to_float(to_string(close)) > p), "hash_only")
+  if close_ok != REF_TRUE {
+    return "none"
+  }
+  let end = to_float(to_string(close)) + 4.0
+  let frag = substring(rest, p, end)
+  let caps = regex_captures("<a[^>]*href=\"([^\"]*)\"[^>]*>([^<]*)</a>", frag)
+  let n = len(caps)
+  if redact(to_string(to_float(to_string(n)) >= 3.0), "hash_only") != REF_TRUE {
+    // ссылка без href/текста — пропустить (rest за </a>)
+    return US() + US() + substring(rest, end, to_float(to_string(len(rest))))
+  }
+  let href = to_string(get(caps, 1.0))
+  let text = to_string(get(caps, 2.0))
+  let tail = substring(rest, end, to_float(to_string(len(rest))))
+  return href + US() + text + US() + tail
+}
+
+pattern LinkJson(href: String, text: String) -> String {
+  return "{\"path\":\"" + href + "\",\"expect_text\":\"" + text + "\"},"
+}
+
+pattern IntakeLinksJson(html: String) -> String {
+  // до 5 внутренних ссылок навигации (path + expect_text=текст ссылки);
+  // внутренняя — начинается с "/" и не "//" (внешние не берём)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut acc = ""
+  let mut n = 0.0
+  let mut rest = html
+  let mut done = false
+  each i in [1, 2, 3, 4, 5, 6, 7, 8] {
+    let active = redact(to_string(done == false and n < 5.0), "hash_only")
+    if active == REF_TRUE {
+      let out = IntakeLinkStep(rest)
+      let out_s = to_string(out)
+      let is_none = redact(to_string(out_s == "none"), "hash_only")
+      if is_none == REF_TRUE {
+        done = true
+      }
+      let not_none = redact(to_string(out_s != "none"), "hash_only")
+      if not_none == REF_TRUE {
+        let parts = split(out_s, US())
+        let href = to_string(get(parts, 0.0))
+        let text = to_string(get(parts, 1.0))
+        let tail = to_string(get(parts, 2.0))
+        let internal = redact(to_string(starts_with(href, "/") and starts_with(href, "//") == false), "hash_only")
+        if internal == REF_TRUE {
+          acc = acc + LinkJson(href, text)
+          n = n + 1.0
+        }
+        rest = tail
+      }
+    }
+  }
+  let empty = redact(to_string(acc == ""), "hash_only")
+  if empty == REF_TRUE {
+    return "null"
+  }
+  let m = len(acc)
+  return "[" + substring(acc, 0.0, m - 1.0) + "]"
+}
+
+pattern IntakeHasHealth(url: String) -> String {
+  // url+"/health" → 200 (http_get Err при >=400) → иначе /healthz → иначе ""
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r1 = try http.SafeGet(url + "/health", 5.0)
+  let r1_s = to_string(r1)
+  let ok1 = redact(to_string(r1_s != "()"), "hash_only")
+  if ok1 == REF_TRUE {
+    return url + "/health"
+  }
+  let r2 = try http.SafeGet(url + "/healthz", 5.0)
+  let r2_s = to_string(r2)
+  let ok2 = redact(to_string(r2_s != "()"), "hash_only")
+  if ok2 == REF_TRUE {
+    return url + "/healthz"
+  }
+  return ""
+}
+
+pattern IntakeDeadline(kind: String, host: String) -> String {
+  // скрипты АСС-1.4 (checks/domain_expiry.py | checks/cert_expiry.py) —
+  // тот же exec-механизм, что в modules/deadlines/run.mlog; вывод JSON
+  // {expires, source} | "null" (не угадывать)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut script = "checks/domain_expiry.py"
+  let is_cert = redact(to_string(kind == "cert"), "hash_only")
+  if is_cert == REF_TRUE {
+    script = "checks/cert_expiry.py"
+  }
+  let dom_ok = redact(to_string(regex_match("^[a-z0-9.-]{3,253}$", host)), "hash_only")
+  if dom_ok != REF_TRUE {
+    return ""
+  }
+  let out = try exec_argv("python3", [script, redact(host, "all")])
+  let out_s = to_string(out)
+  let out_bad = redact(to_string(out_s == "()"), "hash_only")
+  if out_bad == REF_TRUE {
+    return ""
+  }
+  let jr = try parse_json(out_s)
+  let jr_ok = redact(to_string(jr.ok), "hash_only")
+  if jr_ok != REF_TRUE {
+    return ""
+  }
+  let j = jr.value
+  let has_exp = redact(to_string(has_field(j, "expires") == 1.0), "hash_only")
+  if has_exp != REF_TRUE {
+    return ""
+  }
+  return to_string(j.expires)
+}
+
+pattern IntakeLangsJson(url: String) -> String {
+  // языки: GET /ru/, /be/, /en/ → 200 и <html lang=…> совпадает с кодом;
+  // порядок фиксированный [ru, be, en] (тест 1 наряда)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut acc = ""
+  each code in ["ru", "be", "en"] {
+    let c = to_string(code)
+    let r = try http.SafeGet(url + "/" + c + "/", 5.0)
+    let r_s = to_string(r)
+    let got = redact(to_string(r_s != "()"), "hash_only")
+    if got == REF_TRUE {
+      let lang = IntakePageLang(r_s)
+      let lang_match = redact(to_string(lang == c), "hash_only")
+      if lang_match == REF_TRUE {
+        acc = acc + "\"" + c + "\","
+      }
+    }
+  }
+  let empty = redact(to_string(acc == ""), "hash_only")
+  if empty == REF_TRUE {
+    return "null"
+  }
+  let m = len(acc)
+  return "[" + substring(acc, 0.0, m - 1.0) + "]"
+}
+
+pattern IntakeFoundJson(items: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let empty = redact(to_string(items == ""), "hash_only")
+  if empty == REF_TRUE {
+    return "[]"
+  }
+  let m = len(items)
+  return "[" + substring(items, 0.0, m - 1.0) + "]"
+}
+
+pattern IntakeDraftJson(url: String) -> String {
+  // разведка + сборка черновика: JSON (паспорт-форма + found_auto);
+  // null — литералом в строке (в mlog нет null-литерала)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let host = IntakeAllowDomain(url)
+  let page = try http.SafeGet(url, 15.0)
+  let page_s = to_string(page)
+  let page_err = redact(to_string(page_s == "()"), "hash_only")
+  if page_err == REF_TRUE {
+    return "error: сайт недоступен"
+  }
+  let title = IntakeTitle(page_s)
+  let gh = IntakeGithub(page_s)
+  let langs = IntakeLangsJson(url)
+  let pages = IntakeLinksJson(page_s)
+  let health = IntakeHasHealth(url)
+  let dom_exp = IntakeDeadline("domain", host)
+  let cert_exp = IntakeDeadline("cert", host)
+  // found_auto: только реально найденные пути
+  let mut fa = ""
+  let t_ok = redact(to_string(title != ""), "hash_only")
+  if t_ok == REF_TRUE {
+    fa = fa + "\"name\","
+  }
+  let l_ok = redact(to_string(langs != "null"), "hash_only")
+  if l_ok == REF_TRUE {
+    fa = fa + "\"languages\","
+  }
+  let p_ok = redact(to_string(pages != "null"), "hash_only")
+  if p_ok == REF_TRUE {
+    fa = fa + "\"checks.pages\","
+  }
+  let h_ok = redact(to_string(health != ""), "hash_only")
+  if h_ok == REF_TRUE {
+    fa = fa + "\"repo.health_url\","
+  }
+  let g_ok = redact(to_string(gh != ""), "hash_only")
+  if g_ok == REF_TRUE {
+    fa = fa + "\"repo.github\","
+  }
+  let de_ok = redact(to_string(dom_exp != ""), "hash_only")
+  if de_ok == REF_TRUE {
+    fa = fa + "\"domain.expires\","
+  }
+  let ce_ok = redact(to_string(cert_exp != ""), "hash_only")
+  if ce_ok == REF_TRUE {
+    fa = fa + "\"domain.cert_expires\","
+  }
+  // значения (null вместо пустых)
+  let mut name_json = "\"" + title + "\""
+  if t_ok != REF_TRUE {
+    name_json = "null"
+  }
+  let mut gh_json = "\"" + gh + "\""
+  if g_ok != REF_TRUE {
+    gh_json = "null"
+  }
+  let mut hu_json = "\"" + health + "\""
+  if h_ok != REF_TRUE {
+    hu_json = "null"
+  }
+  let mut de_json = "\"" + dom_exp + "\""
+  if de_ok != REF_TRUE {
+    de_json = "null"
+  }
+  let mut ce_json = "\"" + cert_exp + "\""
+  if ce_ok != REF_TRUE {
+    ce_json = "null"
+  }
+  let draft = "{\"slug\":null,\"name\":" + name_json + ",\"url\":\"" + url + "\",\"languages\":" + langs + ",\"timezone\":null,\"people\":null,\"repo\":{\"github\":" + gh_json + ",\"branch\":null,\"deploy\":null,\"health_url\":" + hu_json + ",\"key_envs\":null},\"checks\":{\"uptime_every_min\":null,\"daily_at\":null,\"pages\":" + pages + "},\"modules\":null,\"limits\":null,\"domain\":{\"registrar\":null,\"registrar_panel_url\":null,\"expires\":" + de_json + ",\"expires_source\":\"auto\",\"cert_expires\":" + ce_json + ",\"autorenew\":null,\"dns_provider\":null,\"warn_days\":null,\"renewal_owner\":null},\"profile\":null,\"participation\":null,\"platform\":{\"adapter\":null,\"cdn\":null},\"models\":null,\"sources\":null,\"found_auto\":" + IntakeFoundJson(fa) + "}"
+  return draft
+}
+
+pattern IntakeSaveDraft(url: String, draft: String) -> String {
+  // intake_drafts в data/acc.db: url — ключ; повтор ОБНОВЛЯЕТ черновик
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let gt = grant_issue("db:insert:intake_drafts.tables", 60, "unlimited")
+  let _ = db_execute_with_grant(gt, "CREATE TABLE IF NOT EXISTS intake_drafts (url TEXT PRIMARY KEY, draft TEXT, updated_ts REAL)", [])
+  let c = query_scalar("SELECT COUNT(*) FROM intake_drafts WHERE url = ?1", [url])
+  let exists = redact(to_string(to_float(to_string(c)) >= 1.0), "hash_only")
+  if exists == REF_TRUE {
+    let gu = grant_issue("db:update:intake_drafts", 60, "unlimited")
+    let _ = db_execute_with_grant(gu, "UPDATE intake_drafts SET draft = ?1, updated_ts = ?2 WHERE url = ?3", [draft, now(), url])
+    return "updated"
+  }
+  let gi = grant_issue("db:insert:intake_drafts", 60, "unlimited")
+  let _ = db_execute_with_grant(gi, "INSERT INTO intake_drafts (url, draft, updated_ts) VALUES (?1, ?2, ?3)", [url, draft, now()])
+  return "created"
+}
+
+pattern IntakeDraftCount(url: String) -> Float {
+  let c = query_scalar("SELECT COUNT(*) FROM intake_drafts WHERE url = ?1", [url])
+  return to_float(to_string(c))
+}
+
+pattern IntakeSummary(draft: String) -> String {
+  // краткая сводка для бота: что найдено, что null и почему — «не найдено
+  // при разведке» (вместо технического JSON); конец — указатель на опросник
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let j = parse_json(draft)
+  let found = j.found_auto
+  let mut found_lines = ""
+  each f in found {
+    found_lines = found_lines + "- " + to_string(f) + " — найдено автоматически\n"
+  }
+  // известные null-поля разведки
+  let mut null_lines = ""
+  let slug_null = redact(to_string(to_string(j.slug) == "null"), "hash_only")
+  if slug_null == REF_TRUE {
+    null_lines = null_lines + "- slug — назначит опросник\n"
+  }
+  let tz_null = redact(to_string(to_string(j.timezone) == "null"), "hash_only")
+  if tz_null == REF_TRUE {
+    null_lines = null_lines + "- timezone — спросит опросник\n"
+  }
+  let mod_null = redact(to_string(to_string(j.modules) == "null"), "hash_only")
+  if mod_null == REF_TRUE {
+    null_lines = null_lines + "- modules — спросит опросник\n"
+  }
+  let prof_null = redact(to_string(to_string(j.profile) == "null"), "hash_only")
+  if prof_null == REF_TRUE {
+    null_lines = null_lines + "- profile/participation — спросит опросник\n"
+  }
+  let ad_null = redact(to_string(to_string(j.platform.adapter) == "null"), "hash_only")
+  if ad_null == REF_TRUE {
+    null_lines = null_lines + "- platform.adapter — заголовки ответа в 0.32.0 не читаются, не угадываю\n"
+  }
+  return "Разведка завершена (только чтение).\nНайдено автоматически:\n" + found_lines + "\nНе найдено (null):\n" + null_lines + "\nЧерновик сохранён. Дальше — опросник в Mini App (следующий наряд)."
+}
+
+pattern IntakeCommand(url: String) -> String {
+  // точка входа команды «прими сайт <адрес>»: разведка → сохранение → сводка
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let draft = IntakeDraftJson(url)
+  let d_err = redact(to_string(starts_with(draft, "error:")), "hash_only")
+  if d_err == redact(to_string(true), "hash_only") {
+    return draft
+  }
+  let _ = IntakeSaveDraft(url, draft)
+  // черновик обязан проходить draft-валидацию (тест 4)
+  let v = pp.ValidatePassportDraft(draft)
+  let v_ok = redact(to_string(v == "ok"), "hash_only")
+  if v_ok != REF_TRUE {
+    return "Черновик собран, но draft-валидация отклонила: " + redact(v, "all")
+  }
+  return IntakeSummary(draft)
+}

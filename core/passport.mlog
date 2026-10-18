@@ -287,6 +287,145 @@ pattern ValidatePassport(text: String) -> String {
   return "ok"
 }
 
+pattern ValidatePassportDraft(text: String) -> String {
+  // draft-режим (наряд АСС-2.5, тест 4): те же 16 обязательных КЛЮЧЕЙ
+  // (правило 1); правила 2-6/9/10 применяются только к НЕ-null значениям
+  // (null = «заполнит опросник»); url обязателен всегда (разведка его
+  // знает); правила 7-8 (сканы env/секретов) — как есть (null-safe)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let REF_FALSE = redact(to_string(false), "hash_only")
+  let r = try parse_json(text)
+  if redact(to_string(r.ok == false), "hash_only") == REF_TRUE {
+    return "json: не разбирается (" + r.error.code + ")"
+  }
+  let j = r.value
+  if redact(to_string(type_of(j) == "Struct"), "hash_only") == REF_FALSE {
+    return "json: корень должен быть объектом"
+  }
+  // правило 1 — все 16 ключей присутствуют
+  let keys = ["slug", "name", "url", "languages", "timezone", "people", "repo", "checks", "modules", "limits", "domain", "profile", "participation", "platform", "models", "sources"]
+  each k in keys {
+    let kk = to_string(k)
+    let has = redact(to_string(has_field(j, kk) == 1.0), "hash_only")
+    if has != REF_TRUE {
+      return kk + ": отсутствует"
+    }
+  }
+  // правило 2 (draft): slug — если не null
+  let slugv = json_get(j, "slug", "")
+  let slug_null = redact(to_string(type_of(slugv) == "Null"), "hash_only")
+  if slug_null != REF_TRUE {
+    if redact(to_string(regex_match("^[a-z0-9-]{2,32}$", to_string(slugv))), "hash_only") == REF_FALSE {
+      return "slug: должен состоять из строчных букв, цифр и дефиса, 2–32 символа"
+    }
+  }
+  // правило 3 (draft): url обязателен; health_url — если не null
+  let urlv = json_get(j, "url", "")
+  if redact(to_string(starts_with(to_string(urlv), "https://")), "hash_only") == REF_FALSE {
+    return "url: должен начинаться с https://"
+  }
+  let huv = to_string(json_get(j, "repo.health_url", ""))
+  let hu_null = redact(to_string(huv == "null" or huv == ""), "hash_only")
+  if hu_null != REF_TRUE {
+    if redact(to_string(starts_with(huv, "https://")), "hash_only") == REF_FALSE {
+      return "repo.health_url: должен начинаться с https://"
+    }
+  }
+  // правила 4-6 (draft): enum — только для не-null значений
+  let pv = to_string(json_get(j, "profile", ""))
+  let pv_null = redact(to_string(pv == "null" or pv == ""), "hash_only")
+  if pv_null != REF_TRUE {
+    let p_ok = redact(to_string(pv == "showcase" or pv == "service" or pv == "ugc" or pv == "paid"), "hash_only")
+    if p_ok != REF_TRUE {
+      return "profile: должно быть showcase, service, ugc или paid"
+    }
+  }
+  let pav = to_string(json_get(j, "participation", ""))
+  let pav_null = redact(to_string(pav == "null" or pav == ""), "hash_only")
+  if pav_null != REF_TRUE {
+    let pa_ok = redact(to_string(pav == "pr_with_approval" or pav == "report_only"), "hash_only")
+    if pa_ok != REF_TRUE {
+      return "participation: должно быть pr_with_approval или report_only"
+    }
+  }
+  let adv = to_string(json_get(j, "platform.adapter", ""))
+  let adv_null = redact(to_string(adv == "null" or adv == ""), "hash_only")
+  if adv_null != REF_TRUE {
+    let ad_ok = redact(to_string(adv == "render" or adv == "home-server"), "hash_only")
+    if ad_ok != REF_TRUE {
+      return "platform.adapter: должно быть render или home-server"
+    }
+  }
+  // правила 7-8 — как есть (null-safe)
+  let e1 = ScanEnvs(j, "", 0.0)
+  if redact(to_string(e1 == ""), "hash_only") == REF_FALSE { return e1 }
+  let s1 = ScanSecretsDraft(j, "", 0.0)
+  if redact(to_string(s1 == ""), "hash_only") == REF_FALSE { return s1 }
+  // правило 9 (draft): sources — если не null
+  let src = json_get(j, "sources", "")
+  let src_null = redact(to_string(type_of(src) == "Null"), "hash_only")
+  if src_null != REF_TRUE {
+    let c1 = CheckSources(j)
+    if redact(to_string(c1 == ""), "hash_only") == REF_FALSE { return c1 }
+  }
+  // правило 10 (draft): warn_days — если domain не null
+  let dom = json_get(j, "domain", "")
+  let dom_null = redact(to_string(type_of(dom) == "Null"), "hash_only")
+  if dom_null != REF_TRUE {
+    let w1 = CheckWarnDays(j)
+    if redact(to_string(w1 == ""), "hash_only") == REF_FALSE { return w1 }
+  }
+  return "ok"
+}
+
+pattern ScanSecretsDraft(v: Any, path: String, depth: Float) -> String {
+  // правило 8 с допуском null: каждый узел — null → ""; иначе как
+  // ScanSecrets, но без рекурсии на VM ненадёжной структуре: строки —
+  // ScanString; Struct/List — плоский обход (записи/черновики плоские
+  // по значениям; вложенные Struct черновика — один уровень списков
+  // строк/pages-Struct — обходим на глубину 2)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  if redact(to_string(depth > 12.0), "hash_only") == REF_TRUE { return "" }
+  let t = type_of(v)
+  let is_struct = redact(to_string(t == "Struct"), "hash_only")
+  if is_struct == REF_TRUE {
+    let ks = dict_keys(v)
+    each k in ks {
+      let sub = ScanSecretsDraft(dict_get(v, k, ""), path + "." + k, depth + 1.0)
+      let sub_bad = redact(to_string(sub != ""), "hash_only")
+      if sub_bad == REF_TRUE {
+        return sub
+      }
+    }
+    return ""
+  }
+  let is_list = redact(to_string(t == "List"), "hash_only")
+  if is_list == REF_TRUE {
+    each x in v {
+      let sub2 = ScanSecretsDraft(x, path, depth + 1.0)
+      let sub2_bad = redact(to_string(sub2 != ""), "hash_only")
+      if sub2_bad == REF_TRUE {
+        return sub2
+      }
+    }
+    return ""
+  }
+  let is_str = redact(to_string(t == "String"), "hash_only")
+  if is_str == REF_TRUE {
+    return ScanString(v, path)
+  }
+  let is_float = redact(to_string(t == "Float"), "hash_only") == REF_TRUE
+  if is_float {
+    let ts = to_string(v)
+    let dnum = redact(to_string(regex_match("^[0-9]{6,12}$", ts)), "hash_only")
+    if dnum == REF_TRUE {
+      return path + ": число из 6–12 цифр — похоже на Telegram id"
+    }
+    return ""
+  }
+  return ""
+}
+
 flow Main {
   input: String = "" -> ValidatePassport -> output
 }
