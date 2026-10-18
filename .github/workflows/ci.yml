@@ -130,7 +130,9 @@ jobs:
       - run: docker build -t fosved-acc .
       - name: /health отвечает ok (том в /app/data — АСС-1.6 A.3a)
         run: |
-          docker run -d --name acc -p 10000:10000 -v "$(mktemp -d):/app/data" fosved-acc
+          # модель Render-диска: каталог, записываемый пользователем образа (acc)
+          vol="$(mktemp -d)" && chmod 777 "$vol"
+          docker run -d --name acc -p 10000:10000 -v "$vol:/app/data" fosved-acc
           for i in $(seq 1 60); do
             body=$(curl -s localhost:10000/health) && [ -n "$body" ] && break
             sleep 1
