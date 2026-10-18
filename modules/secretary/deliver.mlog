@@ -1,0 +1,316 @@
+// Секретарь — доставка событий и утренняя сводка (наряд АСС-1.5, A.3+A.4).
+//
+// DeliverTickAll() — цикл раз в минуту (cron "secretary-deliver", A.3):
+//   1. СРАЗУ: события с sent_ts IS NULL и kind ∈ incident_open |
+//      incident_close | deadline_expired — одно сообщение на событие,
+//      после отправки sent_ts = now;
+//   2. остальные виды ждут утренней сводки (здесь не трогаются);
+//   3. сбой отправки: sent_ts не ставится, kv-счётчик попыток
+//      acc_del_tries:<schema>:<event_id>; после 5 неудачных попыток —
+//      событие kind=delivery_failed в журнал (events + ledger через
+//      Journal), kv-флаг acc_del_failed:<schema>:<event_id> — событие
+//      больше не ретраится (sent_ts остаётся NULL = «не доставлено»).
+//
+// SecSummaryOnce() — утренняя сводка (A.4): cron в checks.daily_at по
+// timezone (регистрация — SecBootstrap, маршрут
+// /internal/secretary/bootstrap). Одно сообщение: цвет каждого сайта,
+// что сделано за сутки (число проверок, инциденты с длительностью),
+// сроки ≤30 дней, накопленные события (все остальные с sent_ts IS NULL);
+// после отправки им ставится sent_ts. Дедуп: kv-маркер acc_summary_day =
+// календарный UTC-день — повторный прогон в тот же день второй сводки не
+// шлёт (граница суток — UTC, не 00:00 timezone сайта; на суть не влияет).
+//
+// Текст инцидента (A.3): сайт, что случилось, с какого времени, код/
+// ошибка последней проверки, ссылка на url паспорта.
+//
+// Факты платформы (пробы сессии): query() возвращает список Row (доступ
+// row.<колонка>), пустой результат — [] (len=0, each безопасен);
+// cron_add с тем же prompt создаёт дубль — cron_list сверяется до add;
+// VM 0.32.0: имена переменных в блоках паттерна уникальны, each — на
+// верхнем уровне (АСС-1.4); send_message требует trusted-текст (мост
+// redact all — в bot.mlog SecSend).
+
+import core/store as st
+import core/ledger as lg
+import modules/secretary/bot as bot
+
+pattern DelEventText(slug: String, schema: String, kind: String, ev_text: String) -> String {
+  // текст сообщения о событии (A.3): для инцидентов — url и код/ошибка
+  // последней неуспешной проверки; для остальных — текст события
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut extra = ""
+  let is_open = redact(to_string(kind == "incident_open"), "hash_only")
+  if is_open == REF_TRUE {
+    let pr = try parse_json(read_file_or("data/sites/" + slug + "/passport.json", ""))
+    let pr_ok = redact(to_string(pr.ok), "hash_only")
+    if pr_ok == REF_TRUE {
+      let j = pr.value
+      extra = " url=" + to_string(j.url)
+    }
+    each row_e in query("SELECT error FROM " + schema + ".health_checks WHERE error != 'ok' ORDER BY id DESC LIMIT 1", []) {
+      extra = extra + " последняя проверка: " + to_string(row_e.error)
+    }
+  }
+  return slug + ": " + redact(ev_text, "all") + extra
+}
+
+pattern DelSendPending(schema: String, slug: String) -> String {
+  // доставка «срочных» событий одного сайта (A.3)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut sent_n = 0.0
+  let mut failed_n = 0.0
+  let owner = env_or("ACC_OWNER_TG_ID", "")
+  each ev in query("SELECT id, kind, text FROM " + schema + ".events WHERE sent_ts IS NULL AND kind IN ('incident_open','incident_close','deadline_expired') ORDER BY id", []) {
+    let ev_id = to_float(to_string(ev.id))
+    let ev_kind = to_string(ev.kind)
+    let ev_text = to_string(ev.text)
+    let id_str = to_string(ev_id)
+    // события с записанным delivery_failed не ретраются
+    let gflag = redact(to_string(kv_get("acc_del_failed:" + schema + ":" + id_str) == "1"), "hash_only")
+    if gflag != REF_TRUE {
+      let msg = DelEventText(slug, schema, ev_kind, ev_text)
+      let res = bot.SecSend(owner, msg)
+      let res_ok = redact(to_string(res == "ok"), "hash_only")
+      if res_ok == REF_TRUE {
+        let gu = grant_issue("db:update:" + schema + ".events", 60, "unlimited")
+        let _ = db_execute_with_grant(gu, "UPDATE " + schema + ".events SET sent_ts = ?1 WHERE id = ?2", [now(), ev_id])
+        let _ = kv_delete("acc_del_tries:" + schema + ":" + id_str)
+        sent_n = sent_n + 1.0
+      }
+      if res_ok != REF_TRUE {
+        // неудача: sent_ts не ставится; счётчик попыток
+        let tkey = "acc_del_tries:" + schema + ":" + id_str
+        let t_raw = to_string(kv_get(tkey))
+        let mut next_tries = 1.0
+        let t_empty = redact(to_string(t_raw == ""), "hash_only")
+        if t_empty != REF_TRUE {
+          let tries = to_float(t_raw)
+          let t_pos = redact(to_string(tries >= 1.0), "hash_only")
+          if t_pos == REF_TRUE {
+            next_tries = tries + 1.0
+          }
+        }
+        let _ = kv_set(tkey, to_string(next_tries))
+        if redact(to_string(next_tries >= 5.0), "hash_only") == REF_TRUE {
+          let _ = lg.Journal(slug, "delivery_failed", ev_kind + " id=" + id_str + ": не доставлено за " + to_string(next_tries) + " попыток")
+          let _ = kv_set("acc_del_failed:" + schema + ":" + id_str, "1")
+          let _ = kv_delete(tkey)
+        }
+        failed_n = failed_n + 1.0
+      }
+    }
+  }
+  return "sent=" + to_string(sent_n) + " failed=" + to_string(failed_n)
+}
+
+pattern DeliverTickAll() -> String {
+  // таргет поминутного крона: доставка по всем сайтам
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut done = 0.0
+  let mut rep = ""
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let schema = st.SiteDb(slug)
+      let r = DelSendPending(schema, slug)
+      rep = rep + slug + ": " + r + "\n"
+      done = done + 1.0
+    }
+  }
+  return "deliver sites=" + to_string(done) + "\n" + rep
+}
+
+pattern SecSummaryOnce() -> String {
+  // утренняя сводка (A.4) с дедупом по календарному UTC-дню
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let day = to_string(query_scalar("SELECT date(?1, 'unixepoch')", [now()]))
+  let same_day = redact(to_string(kv_get("acc_summary_day") == day), "hash_only")
+  if same_day == REF_TRUE {
+    return "already"
+  }
+  // цвета сайтов
+  let mut body = "Утренняя сводка АСС:\n"
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let schema = st.SiteDb(slug)
+      let color = bot.SecSiteColor(schema)
+      body = body + color + " " + slug + "\n"
+    }
+  }
+  // за сутки: число проверок, инциденты
+  let mut total_checks = 0.0
+  let mut total_inc = 0.0
+  each e2 in list_dir("data/sites") {
+    let slug2 = to_string(e2)
+    let text2 = read_file_or("data/sites/" + slug2 + "/passport.json", "")
+    let no_file2 = redact(to_string(text2 == ""), "hash_only")
+    if no_file2 != REF_TRUE {
+      let schema2 = st.SiteDb(slug2)
+      let cn = query_scalar("SELECT COUNT(*) FROM " + schema2 + ".health_checks WHERE date(ts, 'unixepoch') = ?1", [day])
+      total_checks = total_checks + to_float(to_string(cn))
+      let in_ = query_scalar("SELECT COUNT(*) FROM " + schema2 + ".incidents WHERE closed_ts IS NOT NULL AND date(closed_ts, 'unixepoch') = ?1", [day])
+      total_inc = total_inc + to_float(to_string(in_))
+      // инциденты с длительностью (закрытые за сутки)
+      each row_i in query("SELECT kind, opened_ts, closed_ts FROM " + schema2 + ".incidents WHERE closed_ts IS NOT NULL AND date(closed_ts, 'unixepoch') = ?1", [day]) {
+        let dur = to_float(to_string(row_i.closed_ts)) - to_float(to_string(row_i.opened_ts))
+        body = body + "инцидент " + to_string(row_i.kind) + " длился " + to_string(dur) + " с\n"
+      }
+      let io = query_scalar("SELECT COUNT(*) FROM " + schema2 + ".incidents WHERE closed_ts IS NULL", [])
+      let io_n = to_float(to_string(io))
+      if redact(to_string(io_n > 0.0), "hash_only") == REF_TRUE {
+        body = body + "открытых инцидентов: " + to_string(io_n) + "\n"
+      }
+    }
+  }
+  body = body + "Проверок за сутки: " + to_string(total_checks) + "; инцидентов закрыто: " + to_string(total_inc) + "\n"
+  // сроки ≤30 дней (или неизвестные — отмечены цветом выше)
+  each e3 in list_dir("data/sites") {
+    let slug3 = to_string(e3)
+    let text3 = read_file_or("data/sites/" + slug3 + "/passport.json", "")
+    let no_file3 = redact(to_string(text3 == ""), "hash_only")
+    if no_file3 != REF_TRUE {
+      let schema3 = st.SiteDb(slug3)
+      each row_d in query("SELECT kind, expires FROM " + schema3 + ".deadlines WHERE id IN (SELECT MAX(id) FROM " + schema3 + ".deadlines WHERE kind IN ('cert','domain') GROUP BY kind)", []) {
+        let exp_d = to_string(row_d.expires)
+        let exp_ok = redact(to_string(regex_match("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", exp_d)), "hash_only")
+        if exp_ok == REF_TRUE {
+          let dj = query_scalar("SELECT julianday(?1) - julianday('now')", [exp_d])
+          let days_left = to_float(to_string(dj))
+          if redact(to_string(days_left <= 30.0), "hash_only") == REF_TRUE {
+            body = body + "Срок " + to_string(row_d.kind) + " " + slug3 + ": " + exp_d + " (" + to_string(days_left) + " дн)\n"
+          }
+        }
+      }
+    }
+  }
+  // накопленные события (не «срочные», ждущие сводки)
+  let mut pending_n = 0.0
+  each e4 in list_dir("data/sites") {
+    let slug4 = to_string(e4)
+    let text4 = read_file_or("data/sites/" + slug4 + "/passport.json", "")
+    let no_file4 = redact(to_string(text4 == ""), "hash_only")
+    if no_file4 != REF_TRUE {
+      let schema4 = st.SiteDb(slug4)
+      let pn = query_scalar("SELECT COUNT(*) FROM " + schema4 + ".events WHERE sent_ts IS NULL AND kind NOT IN ('incident_open','incident_close','deadline_expired')", [])
+      pending_n = pending_n + to_float(to_string(pn))
+      each row_p in query("SELECT kind, text FROM " + schema4 + ".events WHERE sent_ts IS NULL AND kind NOT IN ('incident_open','incident_close','deadline_expired') ORDER BY id LIMIT 10", []) {
+        body = body + "событие " + to_string(row_p.kind) + ": " + redact(to_string(row_p.text), "all") + "\n"
+      }
+    }
+  }
+  body = body + "Накоплено событий для сводки: " + to_string(pending_n)
+  // отправка. NB: each — ТОЛЬКО на верхнем уровне паттерна: each внутри
+  // if в VM-бэкенде (serve, cron) не исполняется (факт АСС-1.3, здесь —
+  // подтверждён пробой: UPDATE после if(res_ok) молча пропускался).
+  // Поэтому: отправка вне if, sent_ts — в верхнеуровневом each с if внутри.
+  let owner = env_or("ACC_OWNER_TG_ID", "")
+  let res = bot.SecSend(owner, body)
+  let res_ok = redact(to_string(res == "ok"), "hash_only")
+  each e5 in list_dir("data/sites") {
+    let slug5 = to_string(e5)
+    let text5 = read_file_or("data/sites/" + slug5 + "/passport.json", "")
+    let no_file5 = redact(to_string(text5 == ""), "hash_only")
+    if no_file5 != REF_TRUE {
+      let upd = redact(to_string(res_ok == REF_TRUE), "hash_only")
+      if upd == REF_TRUE {
+        let schema5 = st.SiteDb(slug5)
+        let gu = grant_issue("db:update:" + schema5 + ".events", 60, "unlimited")
+        let _ = db_execute_with_grant(gu, "UPDATE " + schema5 + ".events SET sent_ts = ?1 WHERE sent_ts IS NULL AND kind NOT IN ('incident_open','incident_close','deadline_expired')", [now()])
+      }
+    }
+  }
+  let sent_flag = redact(to_string(res_ok == REF_TRUE), "hash_only")
+  if sent_flag == REF_TRUE {
+    let _ = kv_set("acc_summary_day", day)
+    return "sent"
+  }
+  return "error: " + redact(res, "all")
+}
+
+pattern SecBootstrap() -> String {
+  // идемпотентная регистрация cron-джоб Секретаря (A.3+A.4):
+  //   secretary-deliver — раз в минуту;
+  //   secretary-summary-<daily_at>-<timezone> — сводка (по уникальным
+  //   парам daily_at/timezone паспортов с модулем secretary).
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 1) поминутная доставка: есть ли джоба
+  let mut deliver_found = 0.0
+  each cj in cron_list() {
+    let same = redact(to_string(cj.prompt == "secretary-deliver"), "hash_only")
+    if same == REF_TRUE {
+      deliver_found = deliver_found + 1.0
+    }
+  }
+  let mut deliver_action = "exists"
+  if redact(to_string(deliver_found < 1.0), "hash_only") == REF_TRUE {
+    // аргументы мостятся redact(…, "all"): в if-контексте, зависящем от
+    // private-производных cron_list(), литералы наследуют private-лейбл
+    // (проба сессии; PII_EGRESS_NETWORK)
+    let _ = cron_add(redact("*/1 * * * *", "all"), redact("secretary-deliver", "all"), redact("UTC", "all"), "skip")
+    deliver_action = "created"
+  }
+  // 2) сводка: уникальные пары daily_at/timezone паспортов с secretary
+  let mut wanted = ""
+  let mut wanted_prompts = ""
+  each e in list_dir("data/sites") {
+    let slug = to_string(e)
+    let text = read_file_or("data/sites/" + slug + "/passport.json", "")
+    let no_file = redact(to_string(text == ""), "hash_only")
+    if no_file != REF_TRUE {
+      let mod_ok = redact(to_string(bot.SecHasModule(text) == "secretary"), "hash_only")
+      if mod_ok == REF_TRUE {
+        let pv = parse_json(text)
+        let checks = pv.checks
+        let daily_at = to_string(checks.daily_at)
+        let tz = to_string(pv.timezone)
+        let hm = split(daily_at, ":")
+        let h = to_string(to_float(to_string(get(hm, 0.0))))
+        let m2 = to_string(to_float(to_string(get(hm, 1.0))))
+        let s_prompt = "secretary-summary-" + daily_at + "-" + tz
+        let s_expr = m2 + " " + h + " * * *"
+        wanted = wanted + s_prompt + "|" + s_expr + "|" + tz + "\n"
+        wanted_prompts = wanted_prompts + s_prompt + "\n"
+      }
+    }
+  }
+  // 3) устаревшие summary-джобы — снять
+  let mut removed = 0.0
+  each cj2 in cron_list() {
+    let is_sec = redact(to_string(contains(to_string(cj2.prompt), "secretary-summary")), "hash_only")
+    if is_sec == REF_TRUE {
+      let in_wanted = redact(to_string(contains(wanted_prompts, to_string(cj2.prompt))), "hash_only")
+      if in_wanted != REF_TRUE {
+        let _ = cron_remove(redact(to_string(cj2.prompt), "all"))
+        removed = removed + 1.0
+      }
+    }
+  }
+  // 4) недостающие summary-джобы — создать (вложенных each нет —
+  //    см. факт АСС-1.4 про VM; существующие prompt'ы — одной строкой)
+  let mut cron_prompts = ""
+  each cj3 in cron_list() {
+    cron_prompts = cron_prompts + to_string(cj3.prompt) + "\n"
+  }
+  let mut created = 0.0
+  let wlines = split(wanted, "\n")
+  each wl in wlines {
+    let empty = redact(to_string(wl == ""), "hash_only")
+    if empty != REF_TRUE {
+      let pf = split(wl, "|")
+      let w_prompt = to_string(get(pf, 0.0))
+      let w_expr = to_string(get(pf, 1.0))
+      let w_tz = to_string(get(pf, 2.0))
+      let have = redact(to_string(contains(cron_prompts, w_prompt)), "hash_only")
+      if have != REF_TRUE {
+        let _ = cron_add(w_expr, w_prompt, w_tz, "skip")
+        created = created + 1.0
+      }
+    }
+  }
+  return "bootstrap secretary: deliver=" + deliver_action + " summary_created=" + to_string(created) + " removed_stale=" + to_string(removed)
+}

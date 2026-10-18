@@ -1,0 +1,76 @@
+// Служебное serve-приложение полигона Секретаря (наряд АСС-1.5, A.5) —
+// НЕ прод. Запускается tests/polygon/secretary/run.sh (порт 18457, только
+// localhost). Продовые маршруты повторены тонкими обёртками (вся логика —
+// в modules/secretary/*), плюс ТЕСТОВЫЕ маршруты /test/*:
+//   /tg                — как в app.mlog (respond(bot.SecWebhook()))
+//   /test/mock-count   — сколько сообщений записал мок SecSend
+//   /test/mock-contains?needle=X — yes/no: есть ли подстрока в мок-сообщениях
+//   /test/deliver      — DeliverTickAll (поминутный цикл доставки)
+//   /test/summary      — SecSummaryOnce (утренняя сводка)
+//   /test/event-count?slug&kind  — событий вида kind в events сайта
+//   /test/pending-count?slug&kind — недоставленных (sent_ts IS NULL)
+// Прямых имён схем нет — только через st.SiteDb(slug) (гард A.4.3).
+
+import core/store as st
+import modules/secretary/bot as bot
+import modules/secretary/deliver as sec
+
+db { url: "sqlite:data/acc.db" }
+memory { persist: "data/memory.db" }
+
+mlogserver {
+  port: 18457
+  host: "127.0.0.1"
+
+  route "/tg" method=POST {
+    let r = bot.SecWebhook()
+    return respond(redact(r, "all"))
+  }
+
+  route "/test/mock-count" method=GET {
+    let n = query_scalar("SELECT COUNT(*) FROM mock_sends", [])
+    return respond("200 " + redact(to_string(n), "all"))
+  }
+
+  route "/test/mock-contains" method=GET {
+    let needle = query_param("needle")
+    let REF_TRUE = redact(to_string(true), "hash_only")
+    let mut found = 0.0
+    each row in query("SELECT text FROM mock_sends", []) {
+      let hit = redact(to_string(contains(redact(to_string(row.text), "all"), redact(to_string(needle), "all"))), "hash_only")
+      if hit == REF_TRUE {
+        found = found + 1.0
+      }
+    }
+    if redact(to_string(found > 0.0), "hash_only") == REF_TRUE {
+      return respond("200 yes")
+    }
+    return respond("200 no")
+  }
+
+  route "/test/deliver" method=GET {
+    let r = sec.DeliverTickAll()
+    return respond("200 " + redact(r, "all"))
+  }
+
+  route "/test/summary" method=GET {
+    let r = sec.SecSummaryOnce()
+    return respond("200 " + redact(r, "all"))
+  }
+
+  route "/test/event-count" method=GET {
+    let slug = query_param("slug")
+    let schema = st.SiteDb(redact(to_string(slug), "all"))
+    let kind = query_param("kind")
+    let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1", [kind])
+    return respond("200 " + redact(to_string(n), "all"))
+  }
+
+  route "/test/pending-count" method=GET {
+    let slug = query_param("slug")
+    let schema = st.SiteDb(redact(to_string(slug), "all"))
+    let kind = query_param("kind")
+    let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1 AND sent_ts IS NULL", [kind])
+    return respond("200 " + redact(to_string(n), "all"))
+  }
+}

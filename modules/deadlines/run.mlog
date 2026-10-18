@@ -51,6 +51,7 @@
 
 import core/store as st
 import core/ledger as lg
+import modules/secretary/bot as sec_bot
 
 pattern DlScriptPath(name: String) -> String {
   // карта имя → путь скрипта (A.2); иные имена — "" (отказ)
@@ -123,6 +124,13 @@ pattern DlThresholds(slug: String, schema: String, kind: String, subject: String
   // события порогов (A.3). Предусловие: expires прошёл ^\d{4}-\d{2}-\d{2}$
   // (проверено в RunCheck) — иначе julianday вернёт NULL.
   let REF_TRUE = redact(to_string(true), "hash_only")
+  // пауза сайта (наряд АСС-1.5 A.2): запись в deadlines продолжается
+  // (выполнена в RunCheck), события порогов на паузе не создаются
+  let paused = sec_bot.SecIsPaused(schema)
+  let is_paused = redact(to_string(paused == "paused"), "hash_only")
+  if is_paused == REF_TRUE {
+    return "paused: события не создаются"
+  }
   let row = query_scalar("SELECT julianday(?1) - julianday('now')", [expires])
   let days_left = to_float(to_string(row))
   let mut warns = 0.0
@@ -226,9 +234,12 @@ pattern RunCheck(name: String, domain: String) -> String {
     }
   }
   // 8) срок неизвестен — событие deadline_unknown раз в сутки
+  // (на паузе события не создаются — АСС-1.5 A.2)
+  let paused_u = sec_bot.SecIsPaused(schema)
+  let is_paused_u = redact(to_string(paused_u == "paused"), "hash_only")
   let cnt = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = 'deadline_unknown' AND date(ts, 'unixepoch') = date(?1, 'unixepoch')", [now()])
   let n = to_float(to_string(cnt))
-  let no_today = redact(to_string(n < 1.0), "hash_only")
+  let no_today = redact(to_string(n < 1.0 and is_paused_u != "paused"), "hash_only")
   if no_today == REF_TRUE {
     let _ = lg.Journal(slug, "deadline_unknown", name + " " + domain + " срок неизвестен (скрипт и ручное поле)")
   }
