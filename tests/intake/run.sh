@@ -9,7 +9,7 @@
 #     черновик появляется в data/acc.db (intake_drafts).
 # ALLOW_PRIVATE / ALLOW_EXEC — только в тесте.
 # Запуск из корня репо: bash tests/intake/run.sh [путь к mlog]
-# Ожидаемо: INTAKE OK (юниты 7/7 + VM-проба бота)
+# Ожидаемо: INTAKE OK (юниты 8/8 + deny 2/2 + VM-проба бота)
 set -uo pipefail
 
 ML="${1:-mlog}"
@@ -35,7 +35,7 @@ cp modules/miniapp/static/app.html modules/miniapp/static/app.js modules/miniapp
 python3 tests/intake/fake_intake_site.py > /tmp/acc_intake_fake.log 2>&1 &
 FAKE=$!
 
-# ── юниты (тесты 1–5, run-режим)
+# ── юниты (тесты 1–2, 4–5, run-режим)
 METALOGOS_ENV_ALLOWLIST="ACC_SESSION_SECRET" \
 ACC_SESSION_SECRET="acc-intake-sess" \
 METALOGOS_ALLOW_EXEC=1 \
@@ -43,7 +43,7 @@ METALOGOS_HTTP_ALLOW_PRIVATE=1 \
 "$ML" run tests/intake/run.mlog > /tmp/intake-unit.out 2>/tmp/intake-unit.err
 UNIT_RC=$?
 cat /tmp/intake-unit.out || true
-grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
+grep -q "POLYGON intake 8/8" /tmp/intake-unit.out
 UNIT_GREP=$?
 # chk объявлена ДО первого использования (наряд АСС-1.9 #33, A.3: раньше
 # объявление стояло ниже — «command not found», результат юнит-полигона
@@ -51,7 +51,15 @@ UNIT_GREP=$?
 # статус grep захватывается сразу — между ним и chk нет команд
 ok=0; fail=0
 chk() { if [ "$1" = "0" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi }
-chk "$UNIT_GREP" "юниты POLYGON intake 7/7 (тесты 1–5)"
+chk "$UNIT_GREP" "юниты POLYGON intake 8/8 (тесты 1–2, 4–5)"
+
+# ── deny-ветка теста 3: отдельный процесс БЕЗ METALOGOS_HTTP_ALLOW_PRIVATE —
+# флаг снимает проверку целиком (core/allowlist.mlog, документировано),
+# под ним deny-путь непроверяем; env-allowlist пуст → прод-путь fail-closed
+"$ML" run tests/intake/deny.mlog > /tmp/intake-deny.out 2>/tmp/intake-deny.err
+cat /tmp/intake-deny.out || true
+grep -q "POLYGON intake-deny 2/2" /tmp/intake-deny.out
+chk "$?" "deny-ветка: истёкшее tmp-разрешение → отказ (тест 3)"
 
 METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_SESSION_SECRET,ACC_PUBLIC_URL,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_OWNER_TG_ID,METALOGOS_HTTP_ALLOW_PRIVATE" \
 ACC_SESSION_SECRET="acc-intake-sess" \
@@ -101,7 +109,7 @@ done
 [ "$VM_OK" = "0" ]; chk "$?" "VM-проба: черновик бота в acc.db (языки+health_url)"
 
 if [ "$fail" = 0 ]; then
-  echo "INTAKE OK (юниты 7/7 + VM-проба бота)"
+  echo "INTAKE OK (юниты 8/8 + deny 2/2 + VM-проба бота)"
   exit 0
 fi
 echo "INTAKE FAIL (ok=$ok fail=$fail)"

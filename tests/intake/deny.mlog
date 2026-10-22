@@ -1,0 +1,47 @@
+// Deny-ветка теста 3 (наряд АСС-2.5 A.3; ремонт — АСС-1.9 #33).
+// Отдельный процесс БЕЗ METALOGOS_HTTP_ALLOW_PRIVATE: флаг снимает
+// проверку целиком (core/allowlist.mlog:82-84, документировано «снимает
+// проверку»), поэтому под ним HttpAllowed/отказ непроверяемы в принципе.
+// Здесь env-allowlist пуст → env_or падает под try → "()" → флага нет —
+// тот же fail-closed путь, что в проде. Запуск: tests/intake/run.sh.
+// Ожидаемо: POLYGON intake-deny 2/2.
+//
+//  3а: истёкшее временное разрешение (kv exp = now−10 — мок времени) →
+//      HttpAllowed false;
+//  3б: http_get к тому же хосту → отказ (runtime SSRF-гард Metalogos
+//      для приватных адресов при отсутствии флага; end-to-end deny).
+
+import core/allowlist as aw
+
+db { url: "sqlite:data/acc.db" }
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut ok = 0.0
+  let mut fail = 0.0
+  let min = "http://127.0.0.1:18489"
+  let exp = to_int(now_unix()) - 10
+  let _ = kv_set("acc_http_tmp:127.0.0.1:18489", to_string(exp))
+  // 3а: HttpAllowed по логике ACC-allowlist (tmp истёк, хост не в списках)
+  let allowed = aw.HttpAllowed(min + "/")
+  let t3a = redact(to_string(allowed == false), "hash_only")
+  if t3a == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // 3б: end-to-end отказ запроса (гард рантайма, флага нет).
+  // Сравнение ТОЛЬКО redact-vs-redact (REF-паттерн полигона): сравнение
+  // redact-значения с сырым литералом всегда false (ловилось мутационно
+  // в #33 — исходный код АСС-2.5 содержал именно redact-vs-raw)
+  let denied = try http_get(min + "/", 3.0)
+  let d_none = redact(to_string(denied), "hash_only")
+  let REF_UNIT = redact("()", "hash_only")
+  let t3b = redact(to_string(d_none == REF_UNIT), "hash_only")
+  if t3b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let mut verdict = "POLYGON intake-deny FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON intake-deny 2/2"
+  }
+  return verdict
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}
