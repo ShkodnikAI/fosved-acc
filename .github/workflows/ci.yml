@@ -117,8 +117,10 @@ jobs:
           curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
           echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
           chmod +x /usr/local/bin/mlog
-      - name: Разведка — 7/7 + VM-проба бота
-        run: bash tests/intake/run.sh mlog | tee intake.out | grep -q "INTAKE OK"
+      - name: "Разведка — 8/8 + deny 2/2 + VM-проба бота"
+        # 2>&1: stderr харнесса в лог (22.10: джоба умирала в CI за ~2 с без
+        # единой строки вывода — диагностика set -x; снять после починки)
+        run: bash -x tests/intake/run.sh mlog 2>&1 | tee intake.out | grep -q "INTAKE OK"
 
   checks:
     name: "Checks: скрипты сроков (юнит с моками сети + smoke)"
