@@ -44,7 +44,14 @@ METALOGOS_HTTP_ALLOW_PRIVATE=1 \
 UNIT_RC=$?
 cat /tmp/intake-unit.out || true
 grep -q "POLYGON intake 7/7" /tmp/intake-unit.out
-chk "$?" "юниты POLYGON intake 7/7 (тесты 1–5)"
+UNIT_GREP=$?
+# chk объявлена ДО первого использования (наряд АСС-1.9 #33, A.3: раньше
+# объявление стояло ниже — «command not found», результат юнит-полигона
+# молча не учитывался, скрипт шёл дальше при красных юнитах);
+# статус grep захватывается сразу — между ним и chk нет команд
+ok=0; fail=0
+chk() { if [ "$1" = "0" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi }
+chk "$UNIT_GREP" "юниты POLYGON intake 7/7 (тесты 1–5)"
 
 METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_SESSION_SECRET,ACC_PUBLIC_URL,ACC_TELEGRAM_WEBHOOK_SECRET,ACC_OWNER_TG_ID,METALOGOS_HTTP_ALLOW_PRIVATE" \
 ACC_SESSION_SECRET="acc-intake-sess" \
@@ -71,9 +78,6 @@ for _ in $(seq 1 80); do
   sleep 0.25
 done
 [ "$up" = "1" ] || { echo "INTAKE FAIL: сервер не поднялся"; tail -10 "$LOG"; exit 1; }
-
-ok=0; fail=0
-chk() { if [ "$1" = "0" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi }
 
 # ── VM-проба: команда бота через POST /tg (бот-путь, serve/VM)
 TG_BODY="{\"update_id\":1,\"message\":{\"message_id\":1,\"from\":{\"id\":$OWNER_TG},\"text\":\"прими сайт http://127.0.0.1:18488\"}}"
