@@ -311,9 +311,10 @@ pattern ValidatePassportDraft(text: String) -> String {
       return kk + ": отсутствует"
     }
   }
-  // правило 2 (draft): slug — если не null
+  // правило 2 (draft): slug — если не null. Паттерн соседних nullable-полей (#37 D3-а):
+  // json_get с default сворачивает JSON null в "" (REFERENCE.md:919), ветка type_of=="Null" мертва.
   let slugv = json_get(j, "slug", "")
-  let slug_null = redact(to_string(type_of(slugv) == "Null"), "hash_only")
+  let slug_null = redact(to_string(to_string(slugv) == "null" or to_string(slugv) == ""), "hash_only")
   if slug_null != REF_TRUE {
     if redact(to_string(regex_match("^[a-z0-9-]{2,32}$", to_string(slugv))), "hash_only") == REF_FALSE {
       return "slug: должен состоять из строчных букв, цифр и дефиса, 2–32 символа"
@@ -361,16 +362,20 @@ pattern ValidatePassportDraft(text: String) -> String {
   if redact(to_string(e1 == ""), "hash_only") == REF_FALSE { return e1 }
   let s1 = ScanSecretsDraft(j, "", 0.0)
   if redact(to_string(s1 == ""), "hash_only") == REF_FALSE { return s1 }
-  // правило 9 (draft): sources — если не null
+  // правило 9 (draft): sources — если не null. Паттерн соседних полей (#37 D3-а):
+  // json_get с default сворачивает JSON null в "", ветка type_of=="Null" мертва.
   let src = json_get(j, "sources", "")
-  let src_null = redact(to_string(type_of(src) == "Null"), "hash_only")
+  let src_null = redact(to_string(to_string(src) == "null" or to_string(src) == ""), "hash_only")
   if src_null != REF_TRUE {
     let c1 = CheckSources(j)
     if redact(to_string(c1 == ""), "hash_only") == REF_FALSE { return c1 }
   }
-  // правило 10 (draft): warn_days — если domain не null
+  // правило 10 (draft): warn_days — если domain И domain.warn_days не null
+  // (тот же класс #37 D3-а; CheckWarnDays не трогаем — полная валидация
+  // обязана требовать список, null = «заполнит опросник» только в draft)
   let dom = json_get(j, "domain", "")
-  let dom_null = redact(to_string(type_of(dom) == "Null"), "hash_only")
+  let wd = json_get(j, "domain.warn_days", "")
+  let dom_null = redact(to_string(to_string(dom) == "null" or to_string(dom) == "" or to_string(wd) == "null" or to_string(wd) == ""), "hash_only")
   if dom_null != REF_TRUE {
     let w1 = CheckWarnDays(j)
     if redact(to_string(w1 == ""), "hash_only") == REF_FALSE { return w1 }

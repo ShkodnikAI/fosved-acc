@@ -2,8 +2,8 @@
 # Бинарь Metalogos закреплён по версии и SHA256 (тот же релиз, что в tega-platform
 # и FOSVED-office-v2). mlog требует glibc >= 2.39 и libssl3 -> Ubuntu 24.04.
 FROM ubuntu:24.04
-ARG MLOG_VERSION=v0.33.1
-ARG MLOG_SHA256=bef3e1b24e10aa909eb6250b71eb7b74911f8df6e8d758f029f991bd9131de98
+ARG MLOG_VERSION=v0.33.2
+ARG MLOG_SHA256=48b9816737665b8270bc268606926faba29d8094df838651a7e605b2ef4a7802
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl libssl3 python3 \
@@ -45,13 +45,15 @@ EXPOSE 10000
 # действует METALOGOS_ALLOW_EXEC, в маршрутах serve — отдельный
 # METALOGOS_SERVE_ALLOW_EXEC (проба B.7).
 ENV METALOGOS_ALLOW_EXEC=1 METALOGOS_SERVE_ALLOW_EXEC=1
-# АСС-1.7 (наряд #24, A.1): движок serve — interpreter, до релиза Metalogos
-# с исправлением Metalogos-#1336. На движке по умолчанию (VM) цикл each
-# внутри тела if НЕ исполняется молча (проверено на предыдущем пине:
-# if {each} → 0 итераций; each {if} → 3). Без этого
-# повторная проверка и открытие инцидента в DutyHandleVerdicts
-# (modules/duty/check.mlog) не выполняются — Дежурный молчит при сбое
-# сайта. Решение и условие возврата на VM — docs/adr/0003-serve-backend-interpreter.md.
+# АСС-1.7 (наряд #24, A.1) → АСС-1.9 (наряд #33): движок serve —
+# interpreter, до релиза Metalogos с исправлением Metalogos-#1430.
+# #1336 (each внутри if) закрыт в 0.33.x; на движке по умолчанию (VM)
+# расхождение другого класса (проверено на этом пине): перехват ошибки
+# вызова паттерна через try сбрасывает локалы фрейма в Unit —
+# (now() - t0) в DutyCheckPage/DutyRecordPage/DutyRecordHealth
+# (modules/duty/check.mlog) падает [TYPE_MISMATCH] Float Sub Unit,
+# Дежурный молчит при сбое сайта. Решение и условие возврата на VM —
+# docs/adr/0003-serve-backend-interpreter.md.
 ENV METALOGOS_SERVE_BACKEND=interpreter
 # Проверка образа на сборке: синтаксис и аудит безопасности без ошибок.
 # Единственный задокументированный допуск — WARN csrf для /tg

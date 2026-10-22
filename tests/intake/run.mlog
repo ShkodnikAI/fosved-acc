@@ -1,13 +1,20 @@
-// Юниты разведки (наряд АСС-2.5, A.3). Запуск: tests/intake/run.sh
-// (поднимает фейк-сайты 18488/18489 и METALOGOS_ALLOW_EXEC/ALLOW_PRIVATE —
-// только в тесте). Ожидаемо: POLYGON intake 7/7.
+// Юниты разведки (наряд АСС-2.5, A.3; ремонт — наряд АСС-1.9 #33).
+// Запуск: tests/intake/run.sh (поднимает фейк-сайты 18488/18489 и
+// METALOGOS_ALLOW_EXEC/ALLOW_PRIVATE — только в тесте).
+// Ожидаемо: POLYGON intake 8/8 (deny-ветка теста 3 — в deny.mlog,
+// отдельный процесс БЕЗ METALOGOS_HTTP_ALLOW_PRIVATE: флаг снимает
+// проверку целиком (core/allowlist.mlog, документировано), поэтому под
+// ним deny-ветка непроверяема в принципе).
 //
 //  тест 1: сайт с /be/, /en/, /ru/, /health → languages ["ru","be","en"],
 //          health_url найден (found_auto содержит repo.health_url);
 //  тест 2: сайт без /health → health_url: null, в found_auto его нет;
-//  тест 3: временное разрешение домена истекает (kv exp = now−1 — мок
-//          времени) → HttpAllowed false, SafeGet отказ;
-//  тест 4: черновик проходит ValidatePassportDraft (null допустим);
+//  тест 3: (перенесён в tests/intake/deny.mlog — процесс без флага);
+//  тест 4: черновик проходит ValidatePassportDraft (null допустим) —
+//          СЕЙЧАС КРАСЕН: core/passport.mlog отвергает slug:null вопреки
+//          собственному докстрингу (json_get с default сворачивает
+//          null → "", REFERENCE.md:919; ветка type_of=="Null" мертва);
+//          фикс в запретной зоне #33 — ждёт вердикта владельца;
 //  тест 5: повторная заявка — одна запись в intake_drafts (обновление).
 
 import modules/intake/recon as intake
@@ -15,6 +22,8 @@ import core/passport as pp
 import core/allowlist as aw
 import core/store as st
 import core/registry as reg
+
+db { url: "sqlite:data/acc.db" }
 
 pattern Contains(s: String, sub: String) -> Bool {
   // NB: contains в бинаре возвращает Bool (REFERENCE пишет Float)
@@ -55,18 +64,14 @@ pattern Main1(_: String) -> String {
   if hu_null == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   let fa_absent = redact(to_string(Contains(d2, "repo.health_url") == false), "hash_only")
   if fa_absent == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
-  // ── тест 3: истёкшее временное разрешение → HttpAllowed false, SafeGet отказ ──
-  let exp = to_int(now_unix()) - 10
-  let _ = kv_set("acc_http_tmp:127.0.0.1:18489", to_string(exp))
-  let allowed = aw.HttpAllowed(min + "/")
-  let t3 = redact(to_string(allowed == false), "hash_only")
-  if t3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
-  let denied = try http_get(min + "/", 3.0)
-  let d_none = redact(to_string(denied), "hash_only")
-  let t3b = redact(to_string(d_none == "()"), "hash_only")
-  if t3b == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // тест 3 перенесён в tests/intake/deny.mlog (процесс без
+  // METALOGOS_HTTP_ALLOW_PRIVATE — см. шапку)
   // ── тест 4: черновик проходит draft-валидацию ──
-  let v = pp.ValidatePassportDraft(d1)
+  // Предмет теста — slug:null (докстринг passport, #37 D3-а). Фейк-сайт
+  // http:// — схема не предмет теста (правило url честно требует https://):
+  // подменяем схему, чтобы вердикт зависел только от slug-ветки.
+  let d1_https = replace(d1, "\"http://", "\"https://")
+  let v = pp.ValidatePassportDraft(d1_https)
   let t4 = redact(to_string(v == "ok"), "hash_only")
   if t4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   // ── тест 5: повторная заявка — одна запись ──
@@ -76,7 +81,10 @@ pattern Main1(_: String) -> String {
   if t5 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   let mut verdict = "POLYGON intake FAIL (OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
   if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
-    verdict = "POLYGON intake 7/7"
+    // ярлык должен совпадать с фактическим числом проверок (8): при
+    // добавлении/удалении проверки обновить здесь И grep в run.sh —
+    // расхождение ловится мутационным тестом (наряд #33, A.3)
+    verdict = "POLYGON intake 8/8"
   }
   return verdict
 }

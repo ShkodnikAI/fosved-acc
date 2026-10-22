@@ -57,7 +57,14 @@ class Full(http.server.BaseHTTPRequestHandler):
 
 class Min(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        body, code = PAGE_MIN, 200
+        # 18489 — сайт БЕЗ /health и /healthz (докстринг модуля; разведка
+        # пробует оба пути) и без языковых страниц: 200 только для "/"
+        # и ссылки "/x" из PAGE_MIN, остальное — явный 404, иначе разведка
+        # находит health_url и тест 2 непроверяем (ремонт #33)
+        if self.path in ("/", "/x"):
+            body, code = PAGE_MIN, 200
+        else:
+            body, code = "not found", 404
         data = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
