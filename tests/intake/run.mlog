@@ -67,7 +67,11 @@ pattern Main1(_: String) -> String {
   // тест 3 перенесён в tests/intake/deny.mlog (процесс без
   // METALOGOS_HTTP_ALLOW_PRIVATE — см. шапку)
   // ── тест 4: черновик проходит draft-валидацию ──
-  let v = pp.ValidatePassportDraft(d1)
+  // Предмет теста — slug:null (докстринг passport, #37 D3-а). Фейк-сайт
+  // http:// — схема не предмет теста (правило url честно требует https://):
+  // подменяем схему, чтобы вердикт зависел только от slug-ветки.
+  let d1_https = replace(d1, "\"http://", "\"https://")
+  let v = pp.ValidatePassportDraft(d1_https)
   let t4 = redact(to_string(v == "ok"), "hash_only")
   if t4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   // ── тест 5: повторная заявка — одна запись ──
