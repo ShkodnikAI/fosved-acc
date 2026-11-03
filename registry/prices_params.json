@@ -1,0 +1,9 @@
+{
+  "outlier_pct": { "value": 30, "approved": false },
+  "jump_pct": { "value": 20, "approved": false },
+  "stale_days": { "value": 30, "approved": false },
+  "min_sources": { "value": 3, "approved": false },
+  "vat": { "value": "unknown", "approved": false },
+  "price_kind": { "value": "unknown", "approved": false },
+  "frequency": { "value": "weekly", "approved": false }
+}

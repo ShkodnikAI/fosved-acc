@@ -84,6 +84,8 @@ jobs:
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
       - name: Mini App — сессии и каркас (АСС-2.2 A.3) — 7/7
         run: bash tests/miniapp/run.sh mlog | tee miniapp.out | grep -q "MINIAPP OK 7/7"
+      - name: Полигон Цен (АСС-3.1 A.4) — 6/6, фикстуры без сети
+        run: bash tests/polygon/prices/run.sh mlog | tee polygon-prices.out | grep -q "POLYGON prices 6/6"
       - name: Валидация реестров (АСС-2.4 A.1) — файлы репозитория + негативы
         run: bash tests/registry/check.sh mlog
       - name: Реестры через Mini App (АСС-2.4 A.3) — 5/5, мок GitHub

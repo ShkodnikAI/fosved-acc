@@ -1,0 +1,126 @@
+// АСС-3.1 (наряд #34, A.1): параметры модуля «Цены» + валидатор.
+// Источник: ТЗ АСС §10.3–10.4. Значения по умолчанию — НЕ утверждены
+// владельцем (approved: false у каждого поля): утверждение — шаг владельца,
+// не исполнителя (мета наряда). Файл — registry/prices_params.json
+// (формат: {имя: {value, approved}}).
+//
+// ValidatePricesParams(text) -> "" (ok) | "prices_params: <причина>".
+// По образцу core/registry.mlog ValidateSources: недоверенные данные
+// (read_file) не решают if без redact(…, "hash_only").
+//
+// LoadPricesParams(text) -> Struct — только для текста, прошедшего
+// ValidatePricesParams (полигон валидирует файл реестра перед загрузкой).
+
+// ── множества допустимых значений ──
+pattern PValidVat(v: String) -> Bool {
+  return v == "unknown" or v == "included" or v == "excluded"
+}
+pattern PValidKind(v: String) -> Bool {
+  return v == "unknown" or v == "retail" or v == "wholesale"
+}
+pattern PValidFreq(v: String) -> Bool {
+  return v == "daily" or v == "weekly" or v == "biweekly" or v == "monthly"
+}
+
+pattern ValidatePricesParams(text: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let jr = try parse_json(text)
+  let none = redact("()", "hash_only")
+  let j_err = redact(to_string(jr), "hash_only")
+  if j_err == none {
+    return "prices_params: не валидный JSON"
+  }
+  let j = jr.value
+  // поле: {value: <число|строка>, approved: bool}
+  each k in ["outlier_pct", "jump_pct", "stale_days", "min_sources", "vat", "price_kind", "frequency"] {
+    let f = json_get(j, k)
+    let f_none = redact(to_string(f), "hash_only")
+    if f_none == none {
+      return "prices_params: нет поля " + k
+    }
+    let ap = f.approved
+    let ap_ok = redact(to_string(to_string(ap) == "true" or to_string(ap) == "false"), "hash_only")
+    if ap_ok != REF_TRUE {
+      return "prices_params: approved должен быть true|false (поле " + k + ")"
+    }
+    let v = f.value
+    let is_num = redact(to_string(k == "outlier_pct" or k == "jump_pct" or k == "stale_days" or k == "min_sources"), "hash_only")
+    if is_num == REF_TRUE {
+      let fv = try to_float(to_string(v))
+      let fv_none = redact(to_string(fv), "hash_only")
+      if fv_none == none {
+        return "prices_params: значение поля " + k + " должно быть числом"
+      }
+      let num = fv.value
+      let pos = redact(to_string(k == "outlier_pct" or k == "jump_pct"), "hash_only")
+      if pos == REF_TRUE {
+        let bad = redact(to_string(num <= 0.0), "hash_only")
+        if bad == REF_TRUE {
+          return "prices_params: " + k + " должен быть положительным (получено " + redact(to_string(num), "all") + ")"
+        }
+        let big = redact(to_string(num >= 100.0), "hash_only")
+        if big == REF_TRUE {
+          return "prices_params: " + k + " должен быть в процентах меньше 100"
+        }
+      }
+      let min_src = redact(to_string(k == "min_sources"), "hash_only")
+      if min_src == REF_TRUE {
+        let bad = redact(to_string(num < 1.0), "hash_only")
+        if bad == REF_TRUE {
+          return "prices_params: min_sources должен быть не меньше 1"
+        }
+      }
+      let stale = redact(to_string(k == "stale_days"), "hash_only")
+      if stale == REF_TRUE {
+        let bad = redact(to_string(num < 1.0), "hash_only")
+        if bad == REF_TRUE {
+          return "prices_params: stale_days должен быть не меньше 1"
+        }
+      }
+    } else {
+      let sv = to_string(v)
+      let is_vat = redact(to_string(k == "vat"), "hash_only")
+      if is_vat == REF_TRUE {
+        let ok = redact(to_string(PValidVat(sv)), "hash_only")
+        if ok != REF_TRUE {
+          return "prices_params: vat должен быть unknown|included|excluded"
+        }
+      }
+      let is_kind = redact(to_string(k == "price_kind"), "hash_only")
+      if is_kind == REF_TRUE {
+        let ok = redact(to_string(PValidKind(sv)), "hash_only")
+        if ok != REF_TRUE {
+          return "prices_params: price_kind должен быть unknown|retail|wholesale"
+        }
+      }
+      let is_freq = redact(to_string(k == "frequency"), "hash_only")
+      if is_freq == REF_TRUE {
+        let ok = redact(to_string(PValidFreq(sv)), "hash_only")
+        if ok != REF_TRUE {
+          return "prices_params: frequency должен быть daily|weekly|biweekly|monthly"
+        }
+      }
+    }
+  }
+  return ""
+}
+
+pattern LoadPricesParams(text: String) -> Struct {
+  let j = parse_json(text)
+  let o = json_get(j, "outlier_pct")
+  let jp = json_get(j, "jump_pct")
+  let sd = json_get(j, "stale_days")
+  let ms = json_get(j, "min_sources")
+  let vt = json_get(j, "vat")
+  let pk = json_get(j, "price_kind")
+  let fq = json_get(j, "frequency")
+  return {
+    outlier_pct: o.value,
+    jump_pct: jp.value,
+    stale_days: sd.value,
+    min_sources: ms.value,
+    vat: vt.value,
+    price_kind: pk.value,
+    frequency: fq.value
+  }
+}

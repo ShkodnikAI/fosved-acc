@@ -1,7 +1,10 @@
 // Валидация реестров репозитория (наряд АСС-2.4, A.1) + негативные
 // фикстуры валидатора. Запуск: bash tests/registry/check.sh (шаг CI).
-// Ожидаемо: REGISTRY VALIDATION OK (positive=2 negative=6)
+// АСС-3.1 (наряд #34, A.1): + валидатор параметров модуля «Цены»
+// (registry/prices_params.json: позитив из репо + негативы).
+// Ожидаемо: REGISTRY VALIDATION OK (positive=3 negative=10)
 import core/registry as reg
+import modules/prices/params as pparam
 
 db { url: "sqlite::memory:" }
 
@@ -18,6 +21,11 @@ pattern Main1(_: String) -> String {
   let e2 = reg.ValidateModels(mdl)
   let p2 = redact(to_string(e2 == ""), "hash_only")
   if p2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // АСС-3.1: параметры «Цен» из репозитория валидны
+  let prm = read_file_or("registry/prices_params.json", "")
+  let e3 = pparam.ValidatePricesParams(prm)
+  let p3 = redact(to_string(e3 == ""), "hash_only")
+  if p3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   // ── негативы: валидатор отклоняет ──
   let n1 = reg.ValidateSources("[{\"id\":\"bad id\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\"}]")
   let q1 = redact(to_string(n1 != ""), "hash_only")
@@ -37,9 +45,22 @@ pattern Main1(_: String) -> String {
   let n6 = reg.ValidateSources("[{\"id\":\"sk\",\"kind\":\"registry\",\"domain\":\"x.example\",\"read_method\":\"http\",\"frequency\":\"weekly\",\"terms_checked\":true,\"status\":\"active\",\"note\":\"sk-abcdef123456\"}]")
   let q6 = redact(to_string(n6 != ""), "hash_only")
   if q6 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  // АСС-3.1: негативы валидатора параметров «Цен»
+  let m1 = pparam.ValidatePricesParams("{\"outlier_pct\":{\"value\":-5,\"approved\":false},\"jump_pct\":{\"value\":20,\"approved\":false},\"stale_days\":{\"value\":30,\"approved\":false},\"min_sources\":{\"value\":3,\"approved\":false},\"vat\":{\"value\":\"unknown\",\"approved\":false},\"price_kind\":{\"value\":\"unknown\",\"approved\":false},\"frequency\":{\"value\":\"weekly\",\"approved\":false}}")
+  let r1 = redact(to_string(m1 != ""), "hash_only")
+  if r1 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let m2 = pparam.ValidatePricesParams("{\"outlier_pct\":{\"value\":30,\"approved\":false},\"jump_pct\":{\"value\":20,\"approved\":false},\"stale_days\":{\"value\":30,\"approved\":false},\"min_sources\":{\"value\":0,\"approved\":false},\"vat\":{\"value\":\"unknown\",\"approved\":false},\"price_kind\":{\"value\":\"unknown\",\"approved\":false},\"frequency\":{\"value\":\"weekly\",\"approved\":false}}")
+  let r2 = redact(to_string(m2 != ""), "hash_only")
+  if r2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let m3 = pparam.ValidatePricesParams("{\"outlier_pct\":{\"value\":30,\"approved\":false},\"jump_pct\":{\"value\":20,\"approved\":false},\"stale_days\":{\"value\":30,\"approved\":false},\"min_sources\":{\"value\":3,\"approved\":false},\"vat\":{\"value\":\"auto\",\"approved\":false},\"price_kind\":{\"value\":\"unknown\",\"approved\":false},\"frequency\":{\"value\":\"weekly\",\"approved\":false}}")
+  let r3 = redact(to_string(m3 != ""), "hash_only")
+  if r3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+  let m4 = pparam.ValidatePricesParams("{\"outlier_pct\":{\"value\":30,\"approved\":\"yes\"},\"jump_pct\":{\"value\":20,\"approved\":false},\"stale_days\":{\"value\":30,\"approved\":false},\"min_sources\":{\"value\":3,\"approved\":false},\"vat\":{\"value\":\"unknown\",\"approved\":false},\"price_kind\":{\"value\":\"unknown\",\"approved\":false},\"frequency\":{\"value\":\"weekly\",\"approved\":false}}")
+  let r4 = redact(to_string(m4 != ""), "hash_only")
+  if r4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   let mut verdict = "REGISTRY VALIDATION FAIL (positive+negative OK=" + to_string(ok) + " FAIL=" + to_string(fail) + ")"
   if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
-    verdict = "REGISTRY VALIDATION OK (positive=2 negative=6)"
+    verdict = "REGISTRY VALIDATION OK (positive=3 negative=10)"
   }
   return verdict
 }
