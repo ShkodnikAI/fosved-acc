@@ -1,0 +1,153 @@
+// АСС-3.1 (наряд #34, A.3): расчёт цены за единицу и тревоги.
+// Источник: ТЗ АСС §10.3–10.4.
+//   1. Медиана по ppu источников; отклонение от медианы больше
+//      outlier_pct → источник исключён с причиной "outlier".
+//   2. Средняя арифметическая по принятым.
+//   3. Принято меньше min_sources → прежняя цена остаётся: статус
+//      "kept_prev", текст оповещения (отправка — Секретарь, здесь текст).
+//   4. Скачок к прошлой цене больше jump_pct → статус "attention".
+//   5. Цена старше stale_days → статус "stale".
+// Приоритет статусов: kept_prev → stale → attention → ok (свежесть данных
+// старше решения о скачке — устаревшие данные не дают сигнала к действию).
+//
+// Все значения ppu/дат происходят из разбора страниц (недоверенные):
+// каждое if-решение — через redact(…, "hash_only") (AGENTS §6).
+//
+// Calc(sources, params, prev, has_prev, today) -> Struct
+//   srcs:    результаты ParsePage с именем источника и датой съёма:
+//            [{name, ok, ppu, unit, date, reason}]; непрочитанные
+//            (ok=false) исключаются с их reason (pack_unparsed и др.)
+//   params:  Struct от LoadPricesParams
+//   prev:    прежняя цена (Float); has_prev: false = прежней цены нет
+//   today:   "YYYY-MM-DD" (детерминизм полигона; в проде — дата тика)
+// Результат: {status, price_per_unit, unit, n_sources, date, excluded, notice}
+
+// ── целая часть (floor) для положительных чисел ──
+pattern PFloor(x: Float) -> Float {
+  return round(x - 0.5)
+}
+
+// ── "YYYY-MM-DD" → число дней (Howard Hinnant days_from_civil) ──
+pattern PDays(date: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let caps = regex_captures("^(\\d{4})-(\\d{2})-(\\d{2})$", date)
+  let has = redact(to_string(length(caps) >= 4.0), "hash_only")
+  if has != REF_TRUE {
+    return {ok: false, days: 0.0}
+  }
+  let y = to_float(to_int(caps[1]))
+  let m0 = to_float(to_int(caps[2]))
+  let d = to_float(to_int(caps[3]))
+  let is_leap_month = redact(to_string(m0 <= 2.0), "hash_only")
+  let mut y2 = y
+  let mut m = m0
+  if is_leap_month == REF_TRUE {
+    y2 = y - 1.0
+    m = m0 + 9.0
+  } else {
+    m = m0 - 3.0
+  }
+  let era = PFloor(y2 / 400.0)
+  let yoe = y2 - era * 400.0
+  let doy = PFloor((153.0 * m + 2.0) / 5.0) + d - 1.0
+  let doe = yoe * 365.0 + PFloor(yoe / 4.0) - PFloor(yoe / 100.0) + doy
+  return {ok: true, days: era * 146097.0 + doe - 719468.0}
+}
+
+// ── медиана списка Float ──
+pattern PMedian(vals: List) -> Float {
+  let s = sort(vals)
+  let n = length(s)
+  let odd = PFloor(n / 2.0) * 2.0 != n
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let is_odd = redact(to_string(odd), "hash_only")
+  if is_odd == REF_TRUE {
+    return s[PFloor(n / 2.0)]
+  }
+  let lo = s[n / 2.0 - 1.0]
+  let hi = s[n / 2.0]
+  return (lo + hi) / 2.0
+}
+
+pattern Calc(srcs: List, params: Struct, prev: Float, has_prev: Bool, today: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let EPS = 0.000001
+  // 1. разбор источников: непрочитанные (pack_unparsed/price_unparsed)
+  //    исключаются сразу; из прочитанных — медиана ppu
+  let mut vals = []
+  let mut excluded = []
+  each it in srcs {
+    let ok_it = redact(to_string(it.ok), "hash_only")
+    if ok_it != REF_TRUE {
+      excluded = push(excluded, {name: it.name, reason: it.reason})
+    } else {
+      vals = push(vals, it.ppu)
+    }
+  }
+  let n = length(vals)
+  let no_data = redact(to_string(n == 0.0), "hash_only")
+  if no_data == REF_TRUE {
+    return {status: "kept_prev", price_per_unit: prev, unit: "", n_sources: 0.0, date: "", excluded: excluded, notice: "Ни один источник не разобран — цена не обновлена"}
+  }
+  let med = PMedian(vals)
+  // 2. исключение выбросов: |v - med| / med * 100 > outlier_pct
+  let mut accepted = []
+  let mut newest_days = -1.0
+  let mut unit = ""
+  each it in srcs {
+    let ok_it = redact(to_string(it.ok), "hash_only")
+    if ok_it == REF_TRUE {
+      let dev = abs(it.ppu - med) / med * 100.0
+      let is_out = redact(to_string(dev > params.outlier_pct + EPS), "hash_only")
+      if is_out == REF_TRUE {
+        excluded = push(excluded, {name: it.name, reason: "outlier"})
+      } else {
+        accepted = push(accepted, it)
+        let empty_unit = redact(to_string(unit == ""), "hash_only")
+        if empty_unit == REF_TRUE {
+          unit = it.unit
+        }
+        let dd = PDays(it.date)
+        let d_ok = redact(to_string(dd.ok), "hash_only")
+        if d_ok == REF_TRUE {
+          let newer = redact(to_string(dd.days > newest_days), "hash_only")
+          if newer == REF_TRUE {
+            newest_days = dd.days
+          }
+        }
+      }
+    }
+  }
+  // 3. принято меньше min_sources → прежняя цена остаётся
+  let na = length(accepted)
+  let too_few = redact(to_string(na < params.min_sources), "hash_only")
+  if too_few == REF_TRUE {
+    let mut note = "Принято источников " + to_string(na) + " из " + to_string(n) + " (порог min_sources=" + to_string(params.min_sources) + ") — цена не обновлена (kept_prev)"
+    each e in excluded {
+      note = note + "; исключён " + e.name + " (" + e.reason + ")"
+    }
+    return {status: "kept_prev", price_per_unit: prev, unit: unit, n_sources: to_float(na), date: "", excluded: excluded, notice: note}
+  }
+  // 4. средняя арифметическая по принятым
+  let mut sum = 0.0
+  each a in accepted {
+    sum = sum + a.ppu
+  }
+  let avg = sum / to_float(na)
+  // 5. устаревание: свежайшая принятая дата старше stale_days → stale
+  let td = PDays(today)
+  let t_ok = redact(to_string(td.ok and newest_days >= 0.0), "hash_only")
+  if t_ok == REF_TRUE {
+    let age = td.days - newest_days
+    let is_stale = redact(to_string(age > params.stale_days + EPS), "hash_only")
+    if is_stale == REF_TRUE {
+      return {status: "stale", price_per_unit: avg, unit: unit, n_sources: to_float(na), date: today, excluded: excluded, notice: "Свежайшая цена источников старше " + to_string(params.stale_days) + " дн. — статус stale"}
+    }
+  }
+  // 6. скачок к прошлой цене больше jump_pct → attention
+  let jump = redact(to_string(has_prev and abs(avg - prev) / prev * 100.0 > params.jump_pct + EPS), "hash_only")
+  if jump == REF_TRUE {
+    return {status: "attention", price_per_unit: avg, unit: unit, n_sources: to_float(na), date: today, excluded: excluded, notice: "Скачок цены: " + to_string(round(avg * 100.0) / 100.0) + " против прежней " + to_string(round(prev * 100.0) / 100.0) + " за " + unit + " (порог jump_pct=" + to_string(params.jump_pct) + "%) — требуется внимание владельца"}
+  }
+  return {status: "ok", price_per_unit: avg, unit: unit, n_sources: to_float(na), date: today, excluded: excluded, notice: ""}
+}

@@ -84,6 +84,8 @@ jobs:
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
       - name: Mini App — сессии и каркас (АСС-2.2 A.3) — 7/7
         run: bash tests/miniapp/run.sh mlog | tee miniapp.out | grep -q "MINIAPP OK 7/7"
+      - name: Полигон Цен (АСС-3.1 A.4) — 6/6, фикстуры без сети
+        run: bash tests/polygon/prices/run.sh mlog | tee polygon-prices.out | grep -q "POLYGON prices 6/6"
       - name: Валидация реестров (АСС-2.4 A.1) — файлы репозитория + негативы
         run: bash tests/registry/check.sh mlog
       - name: Реестры через Mini App (АСС-2.4 A.3) — 5/5, мок GitHub
@@ -200,7 +202,7 @@ jobs:
           docker logs acc > acc-run1.log 2>&1
           tail -20 acc-run1.log
           # Проверка 1: строка сида в логе старта.
-          grep -q '^seed: sites=1 registry=2 static=3$' acc-run1.log
+          grep -q '^seed: sites=1 registry=3 static=3$' acc-run1.log
           # Проверка 2: паспорт сайта оказался на диске.
           docker exec acc test -f /app/data/sites/tega/passport.json
           # Проверка 4: /health → ok.
@@ -219,7 +221,7 @@ jobs:
           done
           docker logs acc2 > acc-run2.log 2>&1
           tail -20 acc-run2.log
-          grep -q '^seed: sites=1 registry=2 static=3$' acc-run2.log
+          grep -q '^seed: sites=1 registry=3 static=3$' acc-run2.log
           # Проверка 3: маркер состояния пережил перезапуск.
           docker exec acc2 test -f /app/data/sites/tega/state.marker
           echo "health2: $body2"

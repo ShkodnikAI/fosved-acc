@@ -1,0 +1,91 @@
+// Полигон Цен (наряд АСС-3.1, A.4): 6 задач по приёмке ТЗ §10.6.
+// Фикстуры — страницы в pages/ (никакой сети, запрет наряда); параметры —
+// registry/prices_params.json (defaults, approved:false). today фиксирован —
+// детерминизм полигона. Бонус-гвард вне счёта задач: правило stale (§10.4).
+// Запуск: bash tests/polygon/prices/run.sh [путь к mlog] → POLYGON prices 6/6
+import modules/prices/parse as ps
+import modules/prices/params as pp
+import modules/prices/calc as calc
+
+db { url: "sqlite::memory:" }
+
+pattern Page(n: String) -> String {
+  return read_file_or("pages/" + n, "")
+}
+
+// Gard(cond_hash, what): громкая остановка при провале (assert_eq),
+// как Loud в core/store.mlog — здесь локально, без импорта core/store.
+pattern Gard(cond_hash: String, what: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  assert_eq(what + cond_hash, what + REF_TRUE)
+  return "ok"
+}
+
+// Src(name, page, date): результат ParsePage с именем источника и датой
+pattern Src(name: String, page: String, date: String) -> Struct {
+  let r = ps.ParsePage(page)
+  return {name: name, ok: r.ok, ppu: r.ppu, unit: r.pack_unit, date: date, reason: r.reason}
+}
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let ptext = read_file_or("registry/prices_params.json", "")
+  let perr = pp.ValidatePricesParams(ptext)
+  let params_ok = redact(to_string(perr == ""), "hash_only")
+  let _ = Gard(params_ok, "POLYGON prices: params должны валидироваться: ")
+  let params = pp.LoadPricesParams(ptext)
+  let mut ok = 0.0
+  let mut fail = 0.0
+
+  // ── задача 1: мешок 25 кг → цена за кг точна (несколько форматов) ──
+  let t1 = [Src("a", Page("p1a.html"), "2026-11-01"), Src("b", Page("p1b.html"), "2026-11-01"), Src("c", Page("p1c.html"), "2026-11-01")]
+  let mut q1 = true
+  each it in t1 {
+    let hit = redact(to_string(it.ok and abs(it.ppu - 50.0) < 0.01 and it.unit == "кг"), "hash_only")
+    if hit != REF_TRUE { let q1 = false }
+  }
+  if redact(to_string(q1), "hash_only") == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── задача 2: страница без читаемой фасовки → исключена pack_unparsed ──
+  let t2 = calc.Calc([Src("nopack", Page("p2.html"), "2026-11-01")], params, 48.0, true, "2026-11-03")
+  let q2 = redact(to_string(t2.status == "kept_prev" and length(t2.excluded) == 1.0 and t2.excluded[0].reason == "pack_unparsed"), "hash_only")
+  if q2 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── задача 3: цена другого уровня → исключена outlier; средняя по 3 ──
+  let t3 = calc.Calc([Src("a", Page("p3a.html"), "2026-11-01"), Src("b", Page("p3b.html"), "2026-11-02"), Src("c", Page("p3c.html"), "2026-11-01"), Src("out", Page("p3out.html"), "2026-11-01")], params, 48.0, true, "2026-11-03")
+  let q3 = redact(to_string(t3.status == "ok" and t3.n_sources == 3.0 and length(t3.excluded) == 1.0 and t3.excluded[0].name == "out" and t3.excluded[0].reason == "outlier" and abs(t3.price_per_unit - 50.0) < 0.01), "hash_only")
+  if q3 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── задача 4: принято 2 из 3 → kept_prev + текст оповещения ──
+  let t4 = calc.Calc([Src("a", Page("p3a.html"), "2026-11-01"), Src("c", Page("p3c.html"), "2026-11-01"), Src("out", Page("p3out.html"), "2026-11-01")], params, 48.5, true, "2026-11-03")
+  let q4 = redact(to_string(t4.status == "kept_prev" and t4.price_per_unit == 48.5 and length(t4.notice) > 0.0), "hash_only")
+  if q4 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── задача 5: скачок к прошлой цене → attention ──
+  let t5 = calc.Calc([Src("a", Page("p3a.html"), "2026-11-02"), Src("b", Page("p3b.html"), "2026-11-02"), Src("c", Page("p3c.html"), "2026-11-02")], params, 40.0, true, "2026-11-03")
+  let q5 = redact(to_string(t5.status == "attention" and abs(t5.price_per_unit - 50.0) < 0.01), "hash_only")
+  if q5 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── задача 6: фраза-подсказка для модели не меняет результат ──
+  let r_inj = Src("inj", Page("p6inj.html"), "2026-11-01")
+  let r_cln = Src("cln", Page("p6clean.html"), "2026-11-01")
+  let tinj = calc.Calc([r_inj], params, 48.0, true, "2026-11-03")
+  let tcln = calc.Calc([r_cln], params, 48.0, true, "2026-11-03")
+  let q6 = redact(to_string(r_inj.ppu == r_cln.ppu and r_inj.ppu == 12.0 and tinj.status == tcln.status and tinj.price_per_unit == tcln.price_per_unit), "hash_only")
+  if q6 == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
+
+  // ── бонус (вне счёта задач, §10.4): свежайшая дата старше stale_days → stale ──
+  let told = calc.Calc([Src("a", Page("p3a.html"), "2026-09-01"), Src("b", Page("p3b.html"), "2026-09-01"), Src("c", Page("p3c.html"), "2026-09-01")], params, 48.0, true, "2026-11-03")
+  let qold = redact(to_string(told.status == "stale"), "hash_only")
+  let _ = Gard(qold, "POLYGON prices BONUS stale: ожидался stale, получено " + told.status + " — ")
+
+  let mut verdict = "POLYGON prices FAIL " + to_string(ok) + "/" + to_string(ok + fail)
+  if redact(to_string(fail == 0.0), "hash_only") == REF_TRUE {
+    verdict = "POLYGON prices 6/6"
+  }
+  return verdict + " | BONUS stale=" + told.status
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

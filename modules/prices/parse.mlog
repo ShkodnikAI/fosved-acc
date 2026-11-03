@@ -1,0 +1,161 @@
+// АСС-3.1 (наряд #34, A.2): детерминированный разбор страницы поставщика.
+// Источник: ТЗ АСС §10.3. Модели ИИ не используются (запрет наряда);
+// текст страницы — НЕдоверенные данные (read_file/будущий http_get):
+// ни одно if-решение на данных страницы не принимается без
+// redact(…, "hash_only") (AGENTS §6). В логику расчёта попадают только
+// разобранные числа (цена, фасовка) и единица измерения.
+//
+// ParsePage(html) -> Struct {ok, price, pack_qty, pack_unit, ppu, reason}:
+//   цена: JSON-LD Product.offers.price, иначе itemprop="price"
+//         (content="…", затем текст элемента); иначе ok=false,
+//         reason="price_unparsed".
+//   фасовка: из <h1> и <ul class="chars"> — «25 кг», «25кг», «25 kg»,
+//         «5 л», «2,5 м²», «2.5 м2», «мешок 25 кг», «шт»; не прочитана —
+//         ok=false, reason="pack_unparsed".
+//   ppu = цена / фасовка (цена за единицу).
+// Исключение источника с причиной решает вызывающий (calc.mlog).
+
+// ── числа ──
+// PNum(s: строка с числом, возможны пробелы и запятая) -> Struct {ok, v}
+pattern PNum(s: String) -> Struct {
+  let t = replace(trim(s), " ", "")
+  let t2 = replace(t, ",", ".")
+  let fv = try to_float(t2)
+  return {ok: fv.ok, v: fv.value}
+}
+
+// ── цена из JSON-LD ──
+pattern PLdPrice(html: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let caps = regex_captures("<script type=\\\"application/ld\\+json\\\">([\\s\\S]*?)</script>", html)
+  let has = redact(to_string(length(caps) >= 2.0), "hash_only")
+  if has == REF_TRUE {
+    let jr = try parse_json(caps[1])
+    if redact(to_string(jr.ok), "hash_only") == REF_TRUE {
+      let o = try json_get(jr.value, "offers")
+      if redact(to_string(o.ok), "hash_only") == REF_TRUE {
+        let pr = try o.value.price
+        if redact(to_string(pr.ok), "hash_only") == REF_TRUE {
+          let n = PNum(to_string(pr.value))
+          if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+            return {ok: true, price: n.v}
+          }
+        }
+      }
+    }
+  }
+  return {ok: false, price: 0.0}
+}
+
+// ── цена из itemprop="price" ──
+pattern PItempropPrice(html: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // вариант 1: <… itemprop="price" … content="1250">
+  let caps = regex_captures("itemprop=\\\"price\\\"[^>]*content=\\\"([^\\\"]+)\\\"", html)
+  let has = redact(to_string(length(caps) >= 2.0), "hash_only")
+  if has == REF_TRUE {
+    let n = PNum(caps[1])
+    if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+      return {ok: true, price: n.v}
+    }
+  }
+  // вариант 2: <span itemprop="price">999</span>
+  let caps2 = regex_captures("itemprop=\\\"price\\\">\\s*([0-9][0-9 .,]*)<", html)
+  let has2 = redact(to_string(length(caps2) >= 2.0), "hash_only")
+  if has2 == REF_TRUE {
+    let n2 = PNum(caps2[1])
+    if redact(to_string(n2.ok), "hash_only") == REF_TRUE {
+      return {ok: true, price: n2.v}
+    }
+  }
+  return {ok: false, price: 0.0}
+}
+
+// ── фасовка ──
+// возвращает {ok, qty, unit}; unit ∈ «кг», «л», «м²», «шт»
+pattern ParsePack(text: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let t = lower(text)
+  // кг: «25 кг», «25кг», «25 kg», «мешок 25 кг»
+  let kg = regex_captures("(\\d+[.,]?\\d*)\\s*(кг|kg)", t)
+  let has_kg = redact(to_string(length(kg) >= 2.0), "hash_only")
+  if has_kg == REF_TRUE {
+    let n = PNum(kg[1])
+    if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+      return {ok: true, qty: n.v, unit: "кг"}
+    }
+  }
+  // литры: «5 л», «5л», «5 l» (границы: не буква)
+  let l = regex_captures("(^|[^a-zа-я0-9.])(\\d+[.,]?\\d*)\\s*(л|l)([^a-zа-я0-9]|$)", t)
+  let has_l = redact(to_string(length(l) >= 4.0), "hash_only")
+  if has_l == REF_TRUE {
+    let n = PNum(l[2])
+    if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+      return {ok: true, qty: n.v, unit: "л"}
+    }
+  }
+  // квадратные метры: «2,5 м²», «2.5 м2», «2,5 м2»
+  let m2 = regex_captures("(\\d+[.,]?\\d*)\\s*(м²|м2|m²|m2)", t)
+  let has_m2 = redact(to_string(length(m2) >= 2.0), "hash_only")
+  if has_m2 == REF_TRUE {
+    let n = PNum(m2[1])
+    if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+      return {ok: true, qty: n.v, unit: "м²"}
+    }
+  }
+  // штуки: «2 шт», «2шт», «2 шт.»
+  let pc = regex_captures("(\\d+[.,]?\\d*)\\s*(шт|pc|pcs|штук)", t)
+  let has_pc = redact(to_string(length(pc) >= 2.0), "hash_only")
+  if has_pc == REF_TRUE {
+    let n = PNum(pc[1])
+    if redact(to_string(n.ok), "hash_only") == REF_TRUE {
+      return {ok: true, qty: n.v, unit: "шт"}
+    }
+  }
+  return {ok: false, qty: 0.0, unit: ""}
+}
+
+// ── страница целиком ──
+pattern ParsePage(html: String) -> Struct {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 1. цена
+  let ld = PLdPrice(html)
+  let from_ld = redact(to_string(ld.ok), "hash_only")
+  let mut price = 0.0
+  let mut price_ok = false
+  if from_ld == REF_TRUE {
+    price = ld.price
+    price_ok = true
+  } else {
+    let ip = PItempropPrice(html)
+    let from_ip = redact(to_string(ip.ok), "hash_only")
+    if from_ip == REF_TRUE {
+      price = ip.price
+      price_ok = true
+    }
+  }
+  let p_ok = redact(to_string(price_ok), "hash_only")
+  if p_ok != REF_TRUE {
+    return {ok: false, price: 0.0, pack_qty: 0.0, pack_unit: "", ppu: 0.0, reason: "price_unparsed"}
+  }
+  // 2. фасовка — из названия (<h1>) и характеристик (<ul class="chars">)
+  let h1 = regex_captures("<h1>([\\s\\S]*?)</h1>", html)
+  let mut desc = ""
+  let has_h1 = redact(to_string(length(h1) >= 2.0), "hash_only")
+  if has_h1 == REF_TRUE {
+    desc = h1[1]
+  }
+  let ch = regex_captures("<ul class=\\\"chars\\\">([\\s\\S]*?)</ul>", html)
+  let has_ch = redact(to_string(length(ch) >= 2.0), "hash_only")
+  if has_ch == REF_TRUE {
+    desc = desc + " " + ch[1]
+  }
+  let pack = ParsePack(desc)
+  let pack_ok = redact(to_string(pack.ok), "hash_only")
+  if pack_ok != REF_TRUE {
+    return {ok: false, price: price, pack_qty: 0.0, pack_unit: "", ppu: 0.0, reason: "pack_unparsed"}
+  }
+  // 3. цена за единицу (фасовка > 0 гарантируется валидностью числа
+  //    и тем, что оно разобрано из «<число> <единица>»)
+  return {ok: true, price: price, pack_qty: pack.qty, pack_unit: pack.unit, ppu: price / pack.qty, reason: ""}
+}
