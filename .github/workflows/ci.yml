@@ -180,19 +180,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t fosved-acc .
-      - name: /health отвечает ok (том в /app/data — АСС-1.6 A.3a)
+      - name: Сид конфигурации + /health (том в /app/data — АСС-1.11 B.1)
         run: |
-          # модель Render-диска: каталог, записываемый пользователем образа (acc)
+          set -e
+          # Модель Render-диска: каталог, записываемый пользователем образа
+          # (acc), пустой на первый запуск и ПЕРЕЖИВАЮЩИЙ перезапуск.
+          # Именно bind-mount, а не именованный том: пустой именованный том
+          # docker сам заполняет содержимым /app/data из образа
+          # (copy-on-first-use) и замаскировал бы самый баг, который ловим;
+          # диск Render — монтирование хост-каталога, ничего из образа он
+          # не получает.
           vol="$(mktemp -d)" && chmod 777 "$vol"
+          # Прогон 1: пустой диск — сид раскладывает конфигурацию.
           docker run -d --name acc -p 10000:10000 -v "$vol:/app/data" fosved-acc
           for i in $(seq 1 60); do
             body=$(curl -s localhost:10000/health) && [ -n "$body" ] && break
             sleep 1
           done
+          docker logs acc > acc-run1.log 2>&1
+          tail -20 acc-run1.log
+          # Проверка 1: строка сида в логе старта.
+          grep -q '^seed: sites=1 registry=2 static=3$' acc-run1.log
+          # Проверка 2: паспорт сайта оказался на диске.
+          docker exec acc test -f /app/data/sites/tega/passport.json
+          # Проверка 4: /health → ok.
           echo "health: $body"
           echo "::notice title=health::$body"
-          docker logs acc | tail -20
           echo "$body" | grep -q '"status":"ok"'
+          # Маркер состояния — создаём ДО перезапуска; должен пережить прогон 2
+          # (сид перезаписывает только конфигурацию, состояние не трогает).
+          docker exec acc sh -c 'echo state > /app/data/sites/tega/state.marker'
+          docker rm -f acc
+          # Прогон 2 на том же диске: конфигурация снова засеяна, состояние живо.
+          docker run -d --name acc2 -p 10000:10000 -v "$vol:/app/data" fosved-acc
+          for i in $(seq 1 60); do
+            body2=$(curl -s localhost:10000/health) && [ -n "$body2" ] && break
+            sleep 1
+          done
+          docker logs acc2 > acc-run2.log 2>&1
+          tail -20 acc-run2.log
+          grep -q '^seed: sites=1 registry=2 static=3$' acc-run2.log
+          # Проверка 3: маркер состояния пережил перезапуск.
+          docker exec acc2 test -f /app/data/sites/tega/state.marker
+          echo "health2: $body2"
+          echo "$body2" | grep -q '"status":"ok"'
+          docker rm -f acc2
 
   deploy:
     name: Deploy to Render (hook, ref=SHA)

@@ -24,15 +24,22 @@ COPY modules /app/modules
 # (checks/) — их вызывает exec из modules/deadlines/run.mlog;
 # python3 выше — интерпретатор скриптов (только stdlib, без пипа).
 COPY checks /app/checks
-# Зеркало паспортов и реестра В data/: песочница serve №455 разрешает
-# файловые чтения только внутри data/; источник истины — sites/ в репо
-# (проверяется CI), зеркало обновляется деплоем.
-COPY sites /app/data/sites
-COPY registry /app/data/registry
-# АСС-2.2 (наряд #15, A.2): статика Mini App — зеркало в data/ (serve-песочница
-# №455 читает только data/); источник истины — modules/miniapp/static/ в репо.
-COPY modules/miniapp/static /app/data/miniapp-static
-RUN mkdir -p /app/data && touch /app/data/.keep && chown -R acc:acc /app/data
+# АСС-1.11 (наряд #39, A.1): конфигурация копируется в /app/seed/, а не в
+# /app/data/. Постоянный диск Render смонтирован в /app/data и закрывает
+# всё, что образ положил в этот каталог, — паспорта, реестры и статика
+# из образа на сервисе исчезали (0 сайтов, пустая статика Mini App).
+# На каждом старте scripts/seed-data.sh раскладывает конфигурацию из
+# seed/ в data/ с перезаписью (источник истины — репозиторий, изменения
+# паспортов идут через PR). Во время работы seed/ только читается.
+COPY sites /app/seed/sites
+COPY registry /app/seed/registry
+# АСС-2.2 (наряд #15, A.2): статика Mini App — источник истины
+# modules/miniapp/static/ в репо, доставка через seed (АСС-1.11).
+COPY modules/miniapp/static /app/seed/miniapp-static
+COPY scripts/seed-data.sh /app/scripts/seed-data.sh
+RUN chmod +x /app/scripts/seed-data.sh \
+ && mkdir -p /app/data && touch /app/data/.keep \
+ && chown -R acc:acc /app/data /app/seed /app/scripts/seed-data.sh
 
 USER acc
 EXPOSE 10000
@@ -59,6 +66,8 @@ ENV METALOGOS_SERVE_BACKEND=interpreter
 # Единственный задокументированный допуск — WARN csrf для /tg
 # (см. scripts/docker-audit.sh и комментарий middleware в app.mlog).
 RUN /app/scripts/docker-audit.sh
-# АСС-1.6 A.3a: смонтированный диск закрывает /app/data — .keep и
-# data/sites создаём при старте контейнера, иначе /health → 503 degraded.
-CMD ["sh", "-c", "touch /app/data/.keep && mkdir -p /app/data/sites && exec mlog serve app.mlog"]
+# АСС-1.6 A.3a: смонтированный диск закрывает /app/data — .keep создаём
+# при старте контейнера, иначе /health → 503 degraded.
+# АСС-1.11 (наряд #39, A.3): перед serve — сид конфигурации из /app/seed
+# в /app/data (паспорта, реестры, статика; состояние не трогаем).
+CMD ["sh", "-c", "touch /app/data/.keep && /app/scripts/seed-data.sh && exec mlog serve app.mlog"]
