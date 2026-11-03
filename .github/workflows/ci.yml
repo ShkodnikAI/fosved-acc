@@ -202,7 +202,7 @@ jobs:
           docker logs acc > acc-run1.log 2>&1
           tail -20 acc-run1.log
           # Проверка 1: строка сида в логе старта.
-          grep -q '^seed: sites=1 registry=2 static=3$' acc-run1.log
+          grep -q '^seed: sites=1 registry=3 static=3$' acc-run1.log
           # Проверка 2: паспорт сайта оказался на диске.
           docker exec acc test -f /app/data/sites/tega/passport.json
           # Проверка 4: /health → ok.
@@ -221,7 +221,7 @@ jobs:
           done
           docker logs acc2 > acc-run2.log 2>&1
           tail -20 acc-run2.log
-          grep -q '^seed: sites=1 registry=2 static=3$' acc-run2.log
+          grep -q '^seed: sites=1 registry=3 static=3$' acc-run2.log
           # Проверка 3: маркер состояния пережил перезапуск.
           docker exec acc2 test -f /app/data/sites/tega/state.marker
           echo "health2: $body2"
