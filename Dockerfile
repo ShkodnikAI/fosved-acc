@@ -31,7 +31,7 @@ COPY checks /app/checks
 # На каждом старте scripts/seed-data.sh раскладывает конфигурацию из
 # seed/ в data/ с перезаписью (источник истины — репозиторий, изменения
 # паспортов идут через PR). Во время работы seed/ только читается.
-COPY sites /app/data/sites
+COPY sites /app/seed/sites
 COPY registry /app/seed/registry
 # АСС-2.2 (наряд #15, A.2): статика Mini App — источник истины
 # modules/miniapp/static/ в репо, доставка через seed (АСС-1.11).
@@ -70,4 +70,4 @@ RUN /app/scripts/docker-audit.sh
 # при старте контейнера, иначе /health → 503 degraded.
 # АСС-1.11 (наряд #39, A.3): перед serve — сид конфигурации из /app/seed
 # в /app/data (паспорта, реестры, статика; состояние не трогаем).
-CMD ["sh", "-c", "touch /app/data/.keep && mkdir -p /app/data/sites && exec mlog serve app.mlog"]
+CMD ["sh", "-c", "touch /app/data/.keep && /app/scripts/seed-data.sh && exec mlog serve app.mlog"]
