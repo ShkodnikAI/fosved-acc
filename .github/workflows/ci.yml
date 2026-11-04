@@ -56,14 +56,21 @@ jobs:
           curl -fsSL -o /usr/local/bin/mlog "https://github.com/ShkodnikAI/Metalogos-/releases/download/${MLOG_VERSION}/mlog-linux-x86_64"
           echo "${MLOG_SHA256}  /usr/local/bin/mlog" | sha256sum -c -
           chmod +x /usr/local/bin/mlog
-      - name: Изоляция сайтов и журнала (A.4, A.3)
+      - name: Изоляция сайтов и журнала (A.4, A.3; #44 B.2 — алиас site в одном запросе)
         run: |
           mkdir -p data/sites/aa data/sites/bb
+          rm -f data/sites/aa/site.db data/sites/bb/site.db
           set -o pipefail
-          mlog run tests/store/isolation.mlog 2> isolation.err | tee isolation.out | grep -q "ISOLATION OK=9 FAIL=0"
+          mlog run tests/store/isolation.mlog 2> isolation.err | tee isolation.out | grep -q "ISOLATION OK=12 FAIL=0"
           # громкая ошибка regex на каждый плохой slug (../a, A, a;DROP);
           # мутация (снять regex в SiteDb) делает этот grep красным
           grep -c "SiteDb: slug" isolation.err | grep -q "^3$"
+          # B.2.5 (#44): подмена файла bb копией файла aa → SiteDb("bb")
+          # громко падает по личности файла (site.meta, A.1.5);
+          # мутация (снять проверку meta в SiteDb) делает шаг красным
+          cp data/sites/aa/site.db data/sites/bb/site.db
+          mlog run tests/store/isolation_swap.mlog 2> swap.err | tee swap.out | grep -q "SWAP OK=1 FAIL=0"
+          grep -q "SiteDb: файл принадлежит другому сайту" swap.err
       - name: Гард прямых имён схем (A.4.3)
         run: ./scripts/check_store_access.sh
       - name: Живучесть ATTACH при serve (A.2) — 50 посл. + 20 парал.

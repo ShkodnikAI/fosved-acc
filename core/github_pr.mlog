@@ -52,7 +52,7 @@ pattern GhField(resp: Any, json_path: String, field: String) -> String {
   if p_ok != redact(to_string(true), "hash_only") {
     return ""
   }
-  let v = p.value
+  let v = p.value // allow(unchecked_result): ранний return выше при p_ok != true — гвард через redact-барьер (№802)
   // path фиксированной глубины 2: "a.b" | "a"
   let parts = split(json_path, ".")
   let np = len(parts)

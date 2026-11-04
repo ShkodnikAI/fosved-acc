@@ -21,7 +21,7 @@ pattern PNum(s: String) -> Struct {
   let t = replace(trim(s), " ", "")
   let t2 = replace(t, ",", ".")
   let fv = try to_float(t2)
-  return {ok: fv.ok, v: fv.value}
+  return {ok: fv.ok, v: fv.value} // allow(unchecked_result): ok и value возвращаются одним Struct — решение за вызывающим (№802)
 }
 
 // ── цена из JSON-LD ──
@@ -32,11 +32,11 @@ pattern PLdPrice(html: String) -> Struct {
   if has == REF_TRUE {
     let jr = try parse_json(caps[1])
     if redact(to_string(jr.ok), "hash_only") == REF_TRUE {
-      let o = try json_get(jr.value, "offers")
+      let o = try json_get(jr.value, "offers") // allow(unchecked_result): jr.value после ok-гварда — через redact-барьер (№802)
       if redact(to_string(o.ok), "hash_only") == REF_TRUE {
-        let pr = try o.value.price
+        let pr = try o.value.price // allow(unchecked_result): o.value после ok-гварда — через redact-барьер (№802)
         if redact(to_string(pr.ok), "hash_only") == REF_TRUE {
-          let n = PNum(to_string(pr.value))
+          let n = PNum(to_string(pr.value)) // allow(unchecked_result): pr.value после ok-гварда — через redact-барьер (№802)
           if redact(to_string(n.ok), "hash_only") == REF_TRUE {
             return {ok: true, price: n.v}
           }

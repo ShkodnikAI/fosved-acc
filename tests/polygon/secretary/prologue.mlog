@@ -17,16 +17,16 @@ pattern Main1(x: String) -> String {
   let _ = db_execute_with_grant(gi, "CREATE TABLE IF NOT EXISTS mock_sends (ts REAL, text TEXT)", [])
   let _ = kv_set("acc_mock_send", "1")
   // 2) сайт tega: схема/таблицы
-  let schema = st.SiteDb("tega")
+  let _ = st.SiteDb("tega")
   let _ = st.SiteInit("tega")
   // открытый инцидент (closed_ts NULL)
-  let gi2 = grant_issue("db:insert:" + schema + ".incidents", 60, "unlimited")
-  let _ = db_execute_with_grant(gi2, "INSERT INTO " + schema + ".incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, ?2, ?3, NULL)", [now() - 100.0, "down", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
+  let gi2 = grant_issue("db:insert:site.incidents", 60, "unlimited")
+  let _ = db_execute_with_grant(gi2, "INSERT INTO site.incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, ?2, ?3, NULL)", [now() - 100.0, "down", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
   // недоставленное срочное событие (уходит в цикле доставки)
-  let gi3 = grant_issue("db:insert:" + schema + ".events", 60, "unlimited")
-  let _ = db_execute_with_grant(gi3, "INSERT INTO " + schema + ".events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 100.0, "incident_open", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
+  let gi3 = grant_issue("db:insert:site.events", 60, "unlimited")
+  let _ = db_execute_with_grant(gi3, "INSERT INTO site.events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 100.0, "incident_open", "down /p2 с " + to_string(now() - 100.0) + " (подтверждено повторной проверкой)"])
   // накопленное событие для утренней сводки (не «срочное»)
-  let _ = db_execute_with_grant(gi3, "INSERT INTO " + schema + ".events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 50.0, "deadline_warn", "domain tega.plus осталось 20 дн (порог 30, expires 2026-11-07)"])
+  let _ = db_execute_with_grant(gi3, "INSERT INTO site.events (ts, kind, text, sent_ts) VALUES (?1, ?2, ?3, NULL)", [now() - 50.0, "deadline_warn", "domain tega.plus осталось 20 дн (порог 30, expires 2026-11-07)"])
   return "prologue ok"
 }
 

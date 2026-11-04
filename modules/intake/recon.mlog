@@ -190,7 +190,7 @@ pattern IntakeDeadline(kind: String, host: String) -> String {
   if jr_ok != REF_TRUE {
     return ""
   }
-  let j = jr.value
+  let j = jr.value // allow(unchecked_result): ранний return выше при jr_ok != true — гвард через redact-барьер (№802)
   let has_exp = redact(to_string(has_field(j, "expires") == 1.0), "hash_only")
   if has_exp != REF_TRUE {
     return ""

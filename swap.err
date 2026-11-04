@@ -1,0 +1,15 @@
+[REDACT][audit-event] redact applied in pattern Main1 — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern Main1 — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern Loud — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteDb — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteDb — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteDb — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteDb — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteInit — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern SiteInit — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern Main1 — policy 'hash_only', target conf 'public'
+[REDACT][audit-event] redact applied in pattern Main1 — policy 'hash_only', target conf 'public'
+[db] Connected: sqlite::memory:
+[try] caught error: [SQL_ERROR] db_execute_with_grant() SQL error: no such database: site
+[GRANT_USE] grant (scope 'db:attach:site') ran non-destructive SQL — no consumption
+[try] caught error: assert_eq failed: SiteDb: файл принадлежит другому сайту; hash=[HASH:fcbcf165908dd18a] hex != SiteDb: файл принадлежит другому сайту; hash=[HASH:b5bea41b6c623f7c] hex

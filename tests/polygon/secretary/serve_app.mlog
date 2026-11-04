@@ -60,17 +60,17 @@ mlogserver {
 
   route "/test/event-count" method=GET {
     let slug = query_param("slug")
-    let schema = st.SiteDb(redact(to_string(slug), "all"))
+    let _ = st.SiteDb(redact(to_string(slug), "all"))
     let kind = query_param("kind")
-    let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1", [kind])
+    let n = query_scalar("SELECT COUNT(*) FROM site.events WHERE kind = ?1", [kind])
     return respond("200 " + redact(to_string(n), "all"))
   }
 
   route "/test/pending-count" method=GET {
     let slug = query_param("slug")
-    let schema = st.SiteDb(redact(to_string(slug), "all"))
+    let _ = st.SiteDb(redact(to_string(slug), "all"))
     let kind = query_param("kind")
-    let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".events WHERE kind = ?1 AND sent_ts IS NULL", [kind])
+    let n = query_scalar("SELECT COUNT(*) FROM site.events WHERE kind = ?1 AND sent_ts IS NULL", [kind])
     return respond("200 " + redact(to_string(n), "all"))
   }
 }

@@ -19,17 +19,17 @@ mlogserver {
   middleware: [security_headers]
 
   route "/w" method=GET {
-    let s = st.SiteDb("t1")
+    let _ = st.SiteDb("t1")
     let _ = st.SiteInit("t1")
-    let g = grant_issue("db:insert:" + s + ".health_checks", 60, "unlimited")
-    let _ = db_execute_with_grant(g, "INSERT INTO " + s + ".health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), "https://t1.example/health", 200.0, 1.0, 1.0, ""])
-    let c = query_scalar("SELECT COUNT(*) FROM " + s + ".health_checks", [])
+    let g = grant_issue("db:insert:site.health_checks", 60, "unlimited")
+    let _ = db_execute_with_grant(g, "INSERT INTO site.health_checks (ts, url, status, ms, text_ok, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", [now(), "https://t1.example/health", 200.0, 1.0, 1.0, ""])
+    let c = query_scalar("SELECT COUNT(*) FROM site.health_checks", [])
     return respond("200 wrote " + to_string(c))
   }
 
   route "/r" method=GET {
-    let s = st.SiteDb("t1")
-    let c = query_scalar("SELECT COUNT(*) FROM " + s + ".health_checks", [])
+    let _ = st.SiteDb("t1")
+    let c = query_scalar("SELECT COUNT(*) FROM site.health_checks", [])
     return respond("200 count=" + to_string(c))
   }
 

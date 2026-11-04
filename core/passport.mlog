@@ -155,7 +155,7 @@ pattern CheckSources(j: Any) -> String {
   if redact(to_string(rj.ok == false), "hash_only") == REF_TRUE {
     return "sources: реестр registry/sources.json — невалидный JSON"
   }
-  let reg = rj.value
+  let reg = rj.value // allow(unchecked_result): выход выше при rj.ok == false — гвард через redact-барьер (№802)
   if redact(to_string(type_of(reg) == "List"), "hash_only") == redact(to_string(false), "hash_only") {
     return "sources: реестр registry/sources.json должен быть массивом"
   }
@@ -214,7 +214,7 @@ pattern ValidatePassport(text: String) -> String {
   if redact(to_string(r.ok == false), "hash_only") == REF_TRUE {
     return "json: не разбирается (" + r.error.code + ")"
   }
-  let j = r.value
+  let j = r.value // allow(unchecked_result): выход выше при r.ok == false — гвард через redact-барьер (№802)
   if redact(to_string(type_of(j) == "Struct"), "hash_only") == REF_FALSE {
     return "json: корень должен быть объектом"
   }
@@ -298,7 +298,7 @@ pattern ValidatePassportDraft(text: String) -> String {
   if redact(to_string(r.ok == false), "hash_only") == REF_TRUE {
     return "json: не разбирается (" + r.error.code + ")"
   }
-  let j = r.value
+  let j = r.value // allow(unchecked_result): выход выше при r.ok == false — гвард через redact-барьер (№802)
   if redact(to_string(type_of(j) == "Struct"), "hash_only") == REF_FALSE {
     return "json: корень должен быть объектом"
   }
