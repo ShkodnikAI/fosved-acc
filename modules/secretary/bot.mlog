@@ -119,20 +119,21 @@ pattern SecHelp() -> String {
   return "Команды АСС:\n/status — состояние сайтов\n/site <slug> — детали сайта\n/pause <slug> — пауза событий сайта\n/resume <slug> — снять паузу\n/lockdown — глобальный флаг тревоги\n/unlock — снять lockdown\n/app — вход в Mini App (кнопка, ссылка на 30 минут)\n/cost — на этапе 1 нет\n/report — на этапе 1 нет"
 }
 
-pattern SecIsPaused(schema: String) -> String {
-  // АСС-2.3: общая логика паузы — core/status.mlog (АСС-1.5 A.2)
-  return status.StIsPaused(schema)
+pattern SecIsPaused(slug: String) -> String {
+  // АСС-2.3: общая логика паузы — core/status.mlog (АСС-1.5 A.2);
+  // АСС-1.12 #44: принимаем SLUG — файл сайта подключает St* внутри
+  return status.StIsPaused(slug)
 }
 
-pattern SecKindColor(schema: String, kind: String) -> String {
+pattern SecKindColor(slug: String, kind: String) -> String {
   // АСС-2.3 (наряд #16): логика цвета — ОБЩАЯ для бота и API — вынесена
   // в core/status.mlog; бот вызывает её же (не вычислять заново)
-  return status.StKindColor(schema, kind)
+  return status.StKindColor(slug, kind)
 }
 
-pattern SecSiteColor(schema: String) -> String {
+pattern SecSiteColor(slug: String) -> String {
   // АСС-2.3 (наряд #16): общая функция цвета — core/status.mlog
-  return status.StSiteColor(schema)
+  return status.StSiteColor(slug)
 }
 
 pattern SecStatusLine(slug: String, color: String, url: String) -> String {
@@ -156,9 +157,10 @@ pattern SecStatusAll() -> String {
       let pr = try parse_json(text)
       let pr_ok = redact(to_string(pr.ok), "hash_only")
       if pr_ok == REF_TRUE {
+        // allow(unchecked_result): ok-гвард выше через redact-барьер (№802)
         let j = pr.value
-        let schema = st.SiteDb(slug)
-        let color = SecSiteColor(schema)
+        let _ = st.SiteDb(slug)
+        let color = SecSiteColor(slug)
         rep = rep + SecStatusLine(slug, color, to_string(j.url))
       }
     }
@@ -185,21 +187,21 @@ pattern SecSiteDetail(slug: String) -> String {
   if no_dir == REF_TRUE {
     return "Сайт " + slug + " не найден"
   }
-  let schema = st.SiteDb(slug)
+  let _ = st.SiteDb(slug)
   let mut rep = "Сайт " + slug + ":\n"
   // открытые инциденты (до 5)
-  let ni = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL", [])
+  let ni = query_scalar("SELECT COUNT(*) FROM site.incidents WHERE closed_ts IS NULL", [])
   let n_inc = to_float(to_string(ni))
   rep = rep + "Открытые инциденты: " + to_string(n_inc) + "\n"
-  each row_o in query("SELECT kind, summary FROM " + schema + ".incidents WHERE closed_ts IS NULL ORDER BY id DESC LIMIT 5", []) {
+  each row_o in query("SELECT kind, summary FROM site.incidents WHERE closed_ts IS NULL ORDER BY id DESC LIMIT 5", []) {
     rep = rep + "- " + to_string(row_o.kind) + ": " + redact(to_string(row_o.summary), "all") + "\n"
   }
   // последние 5 проверок
-  each row_c in query("SELECT url, status, error FROM " + schema + ".health_checks ORDER BY id DESC LIMIT 5", []) {
+  each row_c in query("SELECT url, status, error FROM site.health_checks ORDER BY id DESC LIMIT 5", []) {
     rep = rep + "проверка " + to_string(row_c.url) + " статус " + to_string(row_c.status) + " (" + to_string(row_c.error) + ")\n"
   }
   // сроки (последние записи cert/domain)
-  each row_d in query("SELECT kind, expires, source FROM " + schema + ".deadlines WHERE id IN (SELECT MAX(id) FROM " + schema + ".deadlines WHERE kind IN ('cert','domain') GROUP BY kind)", []) {
+  each row_d in query("SELECT kind, expires, source FROM site.deadlines WHERE id IN (SELECT MAX(id) FROM site.deadlines WHERE kind IN ('cert','domain') GROUP BY kind)", []) {
     rep = rep + "срок " + to_string(row_d.kind) + ": " + to_string(row_d.expires) + " (источник " + to_string(row_d.source) + ")\n"
   }
   return rep
@@ -230,6 +232,7 @@ pattern SecJournalAll(action: String, details: String) -> String {
       let j = try parse_json(text)
       let j_ok = redact(to_string(j.ok), "hash_only")
       if j_ok == REF_TRUE {
+        // allow(unchecked_result): ok-гвард выше через redact-барьер (№802)
         let pv = j.value
         let has = redact(to_string(SecHasModule(text) == "secretary"), "hash_only")
         if has == REF_TRUE {

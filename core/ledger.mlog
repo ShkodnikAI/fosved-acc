@@ -22,8 +22,8 @@
 import core/store as st
 
 pattern Journal(slug: String, action: String, details: String) -> String {
-  let schema = st.SiteDb(slug)
-  let g = grant_issue("db:insert:" + schema + ".events:act=" + action, 60, "unlimited")
-  let _ = db_execute_with_grant(g, "INSERT INTO " + schema + ".events (ts, kind, text) VALUES (?1, ?2, ?3)", [now(), action, details])
+  let _ = st.SiteDb(slug)
+  let g = grant_issue("db:insert:site.events:act=" + action, 60, "unlimited")
+  let _ = db_execute_with_grant(g, "INSERT INTO site.events (ts, kind, text) VALUES (?1, ?2, ?3)", [now(), action, details])
   return "ok"
 }

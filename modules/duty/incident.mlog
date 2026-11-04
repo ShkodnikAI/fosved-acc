@@ -13,20 +13,25 @@
 //
 // Факты проб: UPDATE по гранту (scope db:update:<tbl>) проходит
 // ("non-destructive"); grant_issue пишет запись в ledger (+1).
+// АСС-1.12 (#44): схемы постоянный алиас site; каждый хелпер принимает
+// SLUG и подключает файл сайта st.SiteDb(slug) перед своими запросами.
 
+import core/store as st
 import core/ledger as lg
 
-pattern DutyOpenCount(schema: String, kind: String) -> Float {
+pattern DutyOpenCount(slug: String, kind: String) -> Float {
   // сколько открытых инцидентов вида kind (защита от шума)
-  let n = query_scalar("SELECT COUNT(*) FROM " + schema + ".incidents WHERE closed_ts IS NULL AND kind = ?1", [kind])
+  let _ = st.SiteDb(slug)
+  let n = query_scalar("SELECT COUNT(*) FROM site.incidents WHERE closed_ts IS NULL AND kind = ?1", [kind])
   return to_float(to_string(n))
 }
 
-pattern DutyOpenIncident(schema: String, kind: String) -> Float {
+pattern DutyOpenIncident(slug: String, kind: String) -> Float {
   // id открытого инцидента вида kind (или -1)
   let REF_TRUE = redact(to_string(true), "hash_only")
   let NONE = redact("()", "hash_only")
-  let r = query_row("SELECT id FROM " + schema + ".incidents WHERE closed_ts IS NULL AND kind = ?1 LIMIT 1", [kind])
+  let _ = st.SiteDb(slug)
+  let r = query_row("SELECT id FROM site.incidents WHERE closed_ts IS NULL AND kind = ?1 LIMIT 1", [kind])
   let n = len(r)
   if redact(to_string(n < 1.0), "hash_only") == REF_TRUE {
     return -1.0
@@ -34,21 +39,23 @@ pattern DutyOpenIncident(schema: String, kind: String) -> Float {
   return to_float(to_string(get(r, 0.0)))
 }
 
-pattern DutyInsertIncident(schema: String, slug: String, kind: String, summary: String) -> String {
+pattern DutyInsertIncident(slug: String, kind: String, summary: String) -> String {
   // открыть инцидент + Journal (ledger + events incident_open)
-  let gi = grant_issue("db:insert:" + schema + ".incidents", 60, "unlimited")
-  let _ = db_execute_with_grant(gi, "INSERT INTO " + schema + ".incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, ?2, ?3, NULL)", [now(), kind, summary])
+  let _ = st.SiteDb(slug)
+  let gi = grant_issue("db:insert:site.incidents", 60, "unlimited")
+  let _ = db_execute_with_grant(gi, "INSERT INTO site.incidents (opened_ts, closed_ts, kind, summary, notified_ts) VALUES (?1, NULL, ?2, ?3, NULL)", [now(), kind, summary])
   let _ = lg.Journal(slug, "incident_open", summary)
   return "opened"
 }
 
-pattern DutyCloseIncident(schema: String, slug: String, kind: String, open_id: Float) -> String {
+pattern DutyCloseIncident(slug: String, kind: String, open_id: Float) -> String {
   // закрыть инцидент + Journal (events incident_close с длительностью)
-  let row = query_row("SELECT id, opened_ts FROM " + schema + ".incidents WHERE id = ?1 AND closed_ts IS NULL", [open_id])
+  let _ = st.SiteDb(slug)
+  let row = query_row("SELECT id, opened_ts FROM site.incidents WHERE id = ?1 AND closed_ts IS NULL", [open_id])
   let opened_ts = to_float(to_string(get(row, 1.0)))
   let dur = now() - opened_ts
-  let gu = grant_issue("db:update:" + schema + ".incidents", 60, "unlimited")
-  let _ = db_execute_with_grant(gu, "UPDATE " + schema + ".incidents SET closed_ts = ?1 WHERE id = ?2 AND closed_ts IS NULL", [now(), open_id])
+  let gu = grant_issue("db:update:site.incidents", 60, "unlimited")
+  let _ = db_execute_with_grant(gu, "UPDATE site.incidents SET closed_ts = ?1 WHERE id = ?2 AND closed_ts IS NULL", [now(), open_id])
   let _ = lg.Journal(slug, "incident_close", kind + " длительность_с " + to_string(dur))
   return "closed"
 }
