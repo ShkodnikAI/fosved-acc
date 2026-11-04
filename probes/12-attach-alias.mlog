@@ -1,0 +1,57 @@
+// P наряда АСС-1.12 (#44): проба постоянного алиаса site до любых правок.
+// Проверяет на бинарях v0.33.2 и v0.38.1 (mlog check + mlog serve, один
+// маршрут):
+//   P.1  ATTACH DATABASE ? AS site — путь к файлу параметром, алиас
+//        литеральный; файл подключается;
+//   P.2  DETACH DATABASE site — работает; повторный DETACH на
+//        неподключённом алиасе — ошибка ловится try;
+//   P.3  в одном запросе: подключить A, записать строку, отключить;
+//        подключить B, прочитать — строки A нет (изоляция алиаса);
+//   P.4  литеральный query_scalar("SELECT COUNT(*) FROM
+//        site.sqlite_master", []) проходит (на 0.38.1 — гейт SQL_DYNAMIC).
+//
+// Запуск из корня репо (или чистого каталога с тем же layout):
+//   mkdir -p data/sites/pa data/sites/pb
+//   mlog serve probes/12-attach-alias.mlog &
+//   curl http://127.0.0.1:18463/attach
+// Ожидаемо: P1=attach-ok P2=detach-ok P3=isolated P4=literal-ok
+//
+// Слаги-каталоги pa/pb — фикстурные, в репо не попадают (data/* в
+// .gitignore). Порт 18463 не пересекается с другими харнессами.
+
+db { url: "sqlite::memory:" }
+
+mlogserver {
+  port: 18463
+  host: "127.0.0.1"
+  middleware: [security_headers]
+
+  route "/attach" method=GET {
+    let g = grant_issue("db:attach:probe", 60, "unlimited")
+    // ── P.1: ATTACH с параметром пути ──
+    let a1 = try db_execute_with_grant(g, "ATTACH DATABASE ? AS site", ["data/sites/pa/site.db"])
+    let ok1 = to_string(a1) != "()"
+    // ── P.4: литеральный запрос к подключённому файлу ──
+    let c1 = try query_scalar("SELECT COUNT(*) FROM site.sqlite_master", [])
+    let ok4 = to_string(c1) != "()"
+    // таблица пробы + строка-маркер в A
+    let _ = db_execute("CREATE TABLE IF NOT EXISTS site.probe_t (v TEXT)", [])
+    let marker = "pA-" + to_string(now())
+    let _ = db_execute("INSERT INTO site.probe_t (v) VALUES (?1)", [marker])
+    let inA = to_string(try query_scalar("SELECT COUNT(*) FROM site.probe_t WHERE v = ?1", [marker]))
+    // ── P.2: DETACH литерально; второй DETACH — ошибка ловится ──
+    let d1 = try db_execute_with_grant(g, "DETACH DATABASE site", [])
+    let ok2 = to_string(d1) != "()"
+    let d2 = try db_execute_with_grant(g, "DETACH DATABASE site", [])
+    let ok2b = to_string(d2) == "()"
+    // ── P.3: подключить B, прочитать — строки A нет ──
+    let _ = try db_execute_with_grant(g, "ATTACH DATABASE ? AS site", ["data/sites/pb/site.db"])
+    let _ = db_execute("CREATE TABLE IF NOT EXISTS site.probe_t (v TEXT)", [])
+    let cB = to_string(try query_scalar("SELECT COUNT(*) FROM site.probe_t WHERE v = ?1", [marker]))
+    let ok3 = cB == "0" and inA == "1"
+    if ok1 and ok2 and ok2b and ok3 and ok4 {
+      return respond("200 P1=attach-ok P2=detach-ok P3=isolated P4=literal-ok")
+    }
+    return respond("500 FAIL P1=" + to_string(ok1) + " P2=" + to_string(ok2) + " P2b=" + to_string(ok2b) + " P3=" + to_string(ok3) + " P4=" + to_string(ok4) + " inA=" + inA + " cB=" + cB)
+  }
+}
