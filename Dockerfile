@@ -37,9 +37,13 @@ COPY registry /app/seed/registry
 # modules/miniapp/static/ в репо, доставка через seed (АСС-1.11).
 COPY modules/miniapp/static /app/seed/miniapp-static
 COPY scripts/seed-data.sh /app/scripts/seed-data.sh
-RUN chmod +x /app/scripts/seed-data.sh \
+# АСС-1.11 (наряд #39, блок D, D.1): стартовый скрипт контейнера —
+# сид → serve → ожидание /health → регистрация расписаний
+# (/internal/{duty,deadlines,secretary}/bootstrap) → wait serve.
+COPY scripts/start.sh /app/scripts/start.sh
+RUN chmod +x /app/scripts/seed-data.sh /app/scripts/start.sh \
  && mkdir -p /app/data && touch /app/data/.keep \
- && chown -R acc:acc /app/data /app/seed /app/scripts/seed-data.sh
+ && chown -R acc:acc /app/data /app/seed /app/scripts/seed-data.sh /app/scripts/start.sh
 
 USER acc
 EXPOSE 10000
@@ -70,4 +74,10 @@ RUN /app/scripts/docker-audit.sh
 # при старте контейнера, иначе /health → 503 degraded.
 # АСС-1.11 (наряд #39, A.3): перед serve — сид конфигурации из /app/seed
 # в /app/data (паспорта, реестры, статика; состояние не трогаем).
-CMD ["sh", "-c", "touch /app/data/.keep && /app/scripts/seed-data.sh && exec mlog serve app.mlog"]
+# АСС-1.11 (наряд #39, блок D, D.1): старт — scripts/start.sh: тот же
+# порядок (touch .keep → сид → serve) плюс ожидание /health и регистрация
+# расписаний через /internal/{duty,deadlines,secretary}/bootstrap — до
+# блока D на проде их никто не вызывал, Healthchecks «ACC Дежурный» не
+# получал ни одного пинга (Last Ping: Never). Токен ACC_INTERNAL_TOKEN
+# не печатается (URL и тело подавлены в start.sh).
+CMD ["/bin/sh", "/app/scripts/start.sh"]

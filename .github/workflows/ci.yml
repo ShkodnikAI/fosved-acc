@@ -182,7 +182,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t fosved-acc .
-      - name: Сид конфигурации + /health (том в /app/data — АСС-1.11 B.1)
+      - name: Сид + bootstrap расписаний + /health (том в /app/data — АСС-1.11 B.1 + D.2)
         run: |
           set -e
           # Модель Render-диска: каталог, записываемый пользователем образа
@@ -193,16 +193,34 @@ jobs:
           # диск Render — монтирование хост-каталога, ничего из образа он
           # не получает.
           vol="$(mktemp -d)" && chmod 777 "$vol"
-          # Прогон 1: пустой диск — сид раскладывает конфигурацию.
-          docker run -d --name acc -p 10000:10000 -v "$vol:/app/data" fosved-acc
+          # Блок D (D.2): в контейнере заданы ACC_INTERNAL_TOKEN и
+          # METALOGOS_ENV_ALLOWLIST (в serve env() читается только из
+          # allowlist; та же пара нужна на проде — runbook §2; heartbeat-URL
+          # пуст → skip, без пинга из CI). Тестовый токен — литерал
+          # (прецедент: tests/serve/duty_serve.sh).
+          # Прогон 1: пустой диск — сид раскладывает конфигурацию, стартовый
+          # скрипт (start.sh) регистрирует расписания через bootstrap-маршруты.
+          docker run -d --name acc -p 10000:10000 \
+            -e ACC_INTERNAL_TOKEN=poly-internal-token \
+            -e METALOGOS_ENV_ALLOWLIST=ACC_INTERNAL_TOKEN,ACC_HEARTBEAT_URL \
+            -v "$vol:/app/data" fosved-acc
           for i in $(seq 1 60); do
             body=$(curl -s localhost:10000/health) && [ -n "$body" ] && break
             sleep 1
+          done
+          # Строка bootstrap появляется ПОСЛЕ /health (start.sh зовёт
+          # маршруты, когда serve уже поднялся; duty при сбое сайта ждёт
+          # 60 с подтверждения) — ждём её до ~180 с.
+          for i in $(seq 1 90); do
+            docker logs acc 2>&1 | grep -q '^bootstrap: duty=200 deadlines=200 secretary=200$' && break
+            sleep 2
           done
           docker logs acc > acc-run1.log 2>&1
           tail -20 acc-run1.log
           # Проверка 1: строка сида в логе старта.
           grep -q '^seed: sites=1 registry=3 static=3$' acc-run1.log
+          # Проверка D.2.1: все три расписания зарегистрированы на старте.
+          grep -q '^bootstrap: duty=200 deadlines=200 secretary=200$' acc-run1.log
           # Проверка 2: паспорт сайта оказался на диске.
           docker exec acc test -f /app/data/sites/tega/passport.json
           # Проверка 4: /health → ok.
@@ -213,17 +231,33 @@ jobs:
           # (сид перезаписывает только конфигурацию, состояние не трогает).
           docker exec acc sh -c 'echo state > /app/data/sites/tega/state.marker'
           docker rm -f acc
-          # Прогон 2 на том же диске: конфигурация снова засеяна, состояние живо.
-          docker run -d --name acc2 -p 10000:10000 -v "$vol:/app/data" fosved-acc
+          # Прогон 2 на том же диске: конфигурация снова засеяна, состояние
+          # живо, расписания НЕ задублированы (D.2.2).
+          docker run -d --name acc2 -p 10000:10000 \
+            -e ACC_INTERNAL_TOKEN=poly-internal-token \
+            -e METALOGOS_ENV_ALLOWLIST=ACC_INTERNAL_TOKEN,ACC_HEARTBEAT_URL \
+            -v "$vol:/app/data" fosved-acc
           for i in $(seq 1 60); do
             body2=$(curl -s localhost:10000/health) && [ -n "$body2" ] && break
             sleep 1
           done
+          for i in $(seq 1 90); do
+            docker logs acc2 2>&1 | grep -q '^bootstrap: duty=200 deadlines=200 secretary=200$' && break
+            sleep 2
+          done
           docker logs acc2 > acc-run2.log 2>&1
           tail -20 acc-run2.log
           grep -q '^seed: sites=1 registry=3 static=3$' acc-run2.log
+          grep -q '^bootstrap: duty=200 deadlines=200 secretary=200$' acc-run2.log
           # Проверка 3: маркер состояния пережил перезапуск.
           docker exec acc2 test -f /app/data/sites/tega/state.marker
+          # Проверка D.2.2: повторный старт не создал дублей duty-tick —
+          # отчёт маршрута показывает action=exists (cron_list нашёл джобу,
+          # созданную на прогоне 1; проверка «по report из ответа», как в
+          # tests/serve/duty_serve.sh — sanctioned D.2).
+          rep2="$(docker exec acc2 curl -s --max-time 180 "http://127.0.0.1:10000/internal/duty/bootstrap?token=poly-internal-token")"
+          echo "duty report (2-й старт): $rep2"
+          echo "$rep2" | grep -q 'action=exists'
           echo "health2: $body2"
           echo "$body2" | grep -q '"status":"ok"'
           docker rm -f acc2
