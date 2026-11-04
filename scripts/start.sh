@@ -48,10 +48,10 @@ done
 # одна строка с кодами ответов (duty — до 180 с: при сбое сайта цикл
 # подтверждения ждёт 60 с, tests/serve/duty_serve.sh:81).
 if [ -n "${ACC_INTERNAL_TOKEN:-}" ]; then
-  d=$(curl -s -o /dev/null -w '%{http_code}' --max-time 180 "http://127.0.0.1:${PORT}/internal/duty/bootstrap?token=${ACC_INTERNAL_TOKEN}")
-  l=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:${PORT}/internal/deadlines/bootstrap?token=${ACC_INTERNAL_TOKEN}")
-  s=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:${PORT}/internal/secretary/bootstrap?token=${ACC_INTERNAL_TOKEN}")
-  echo "bootstrap: duty=${d} deadlines=${l} secretary=${s}"
+  # МУТАЦИЯ (наряд #39, D.2): вызовы bootstrap убраны — проверка D.2.1
+  # (grep строки «bootstrap: duty=200 …») обязана покраснеть.
+  # После фиксации красного прогона следует git revert.
+  :
 else
   echo "bootstrap: skipped (ACC_INTERNAL_TOKEN не задан)"
 fi
