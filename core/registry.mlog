@@ -100,7 +100,7 @@ pattern ValidateSources(text: String) -> String {
   if j_err == none {
     return "sources: не валидный JSON"
   }
-  let j = jr.value
+  let j = jr.value // allow(unchecked_result): ранний return выше при j_err == none — гвард через redact-барьер (№802)
   let mut seen_ids = ","
   let mut n = 0.0
   each e in j {
@@ -162,7 +162,7 @@ pattern ValidateModels(text: String) -> String {
   if j_err == none {
     return "models: не валидный JSON"
   }
-  let j = jr.value
+  let j = jr.value // allow(unchecked_result): ранний return выше при j_err == none — гвард через redact-барьер (№802)
   let mut seen_ids = ","
   each e in j {
     let id = to_string(e.id)
@@ -248,7 +248,7 @@ pattern RegistryNewText(kind: String, text: String, op: String, id: String, entr
   if j_err == none {
     return ""
   }
-  let j = jr.value
+  let j = jr.value // allow(unchecked_result): ранний return выше при j_err == none — гвард через redact-барьер (№802)
   let mut found = 0.0
   let mut acc = ""
   let is_add = redact(to_string(op == "add"), "hash_only")
@@ -308,7 +308,7 @@ pattern RegistryNewText(kind: String, text: String, op: String, id: String, entr
     let ne = try parse_json(entry_text)
     let ne_ok = redact(to_string(ne.ok), "hash_only")
     if ne_ok == REF_TRUE {
-      let entry = ne.value
+      let entry = ne.value // allow(unchecked_result): ok-гвард ne_ok выше — через redact-барьер (№802)
       let is_struct = redact(to_string(type_of(entry) == "Struct"), "hash_only")
       if is_struct != REF_TRUE {
         return ""

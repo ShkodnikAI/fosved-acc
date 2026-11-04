@@ -30,7 +30,7 @@ pattern ValidatePricesParams(text: String) -> String {
   if j_err == none {
     return "prices_params: не валидный JSON"
   }
-  let j = jr.value
+  let j = jr.value // allow(unchecked_result): ранний return выше при j_err == none — гвард через redact-барьер (№802)
   // поле: {value: <число|строка>, approved: bool}
   each k in ["outlier_pct", "jump_pct", "stale_days", "min_sources", "vat", "price_kind", "frequency"] {
     let f = json_get(j, k)
@@ -51,7 +51,7 @@ pattern ValidatePricesParams(text: String) -> String {
       if fv_none == none {
         return "prices_params: значение поля " + k + " должно быть числом"
       }
-      let num = fv.value
+      let num = fv.value // allow(unchecked_result): ранний return выше при fv_none == none — гвард через redact-барьер (№802)
       let pos = redact(to_string(k == "outlier_pct" or k == "jump_pct"), "hash_only")
       if pos == REF_TRUE {
         let bad = redact(to_string(num <= 0.0), "hash_only")
