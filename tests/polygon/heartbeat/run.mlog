@@ -1,3 +1,4 @@
+profile capability { allow_carrier: "send_message" allow_carrier: "http_post" allow_carrier: "exec_argv" }
 // Полигон «мёртвой руки» (наряд АСС-1.6, A.3). Запуск:
 // tests/polygon/heartbeat/run.sh — три прогона из отдельных деревьев:
 //   1) сайт ок + ACC_HEARTBEAT_URL задан → тик прошёл → hb_count=1
