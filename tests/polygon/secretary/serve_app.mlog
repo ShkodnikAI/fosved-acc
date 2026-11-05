@@ -1,3 +1,4 @@
+profile capability { allow_carrier: "send_message" allow_carrier: "http_post" allow_carrier: "exec_argv" }
 // Служебное serve-приложение полигона Секретаря (наряд АСС-1.5, A.5) —
 // НЕ прод. Запускается tests/polygon/secretary/run.sh (порт 18457, только
 // localhost). Продовые маршруты повторены тонкими обёртками (вся логика —
