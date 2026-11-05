@@ -338,6 +338,46 @@ pattern SecResume(slug: String) -> String {
   return "Сайт " + slug + " снят с паузы."
 }
 
+pattern SecDispatch(text: String) -> String {
+  // диспетчер команд (A.3 наряда #50): вынесен из SecWebhook, чтобы сбой
+  // обработки одного обновления ловился обёрткой try в SecWebhook:
+  // обновление ACKается 200 (Telegram не зацикливает повтор), владелец
+  // получает класс ошибки. Возвращает "<код> <тело>" для respond.
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // «прими сайт <адрес>» (АСС-2.5): разведка только на чтение → черновик
+  let is_intake = redact(to_string(starts_with(text, "прими сайт ")), "hash_only")
+  if is_intake == REF_TRUE {
+    let url = substring(text, to_float(to_string(len("прими сайт "))), to_float(to_string(len(text))))
+    let url_ok = redact(to_string(starts_with(url, "https://") or starts_with(url, "http://")), "hash_only")
+    if url_ok != REF_TRUE {
+      let _ = SecReply("Адрес должен начинаться с https:// (или http:// для проверки).")
+      return "200 {}"
+    }
+    let rep = intake.IntakeCommand(url)
+    let _ = SecReply(rep)
+    return "200 {}"
+  }
+  // /app (АСС-2.2): кнопка уходит швом send_message с reply_markup;
+  // текстовый ответ — только при «не настроено»/ошибке (кнопка — не текст)
+  let c_app = redact(to_string(text == "/app"), "hash_only")
+  if c_app == REF_TRUE {
+    let r = SecSendAppButton()
+    let app_ok = redact(to_string(r == "ok"), "hash_only")
+    if app_ok == REF_TRUE {
+      return "200 {}"
+    }
+    let _ = SecReply(r)
+    return "200 {}"
+  }
+  let reply = SecHandleText(text)
+  let sent = SecReply(reply)
+  let sent_ok = redact(to_string(sent == "ok"), "hash_only")
+  if sent_ok == REF_TRUE {
+    return "200 {}"
+  }
+  return "200 {}"
+}
+
 pattern SecWebhook() -> String {
   // вся логика POST /tg; возвращает "<код> <тело>" для respond
   let REF_TRUE = redact(to_string(true), "hash_only")
@@ -393,37 +433,21 @@ pattern SecWebhook() -> String {
     let _ = SecJournalAll("outsider", "чужой отправитель — команда не исполнена")
     return "200 {}"
   }
-  // 5) команда → ответ владельцу
-  // «прими сайт <адрес>» (АСС-2.5): разведка только на чтение → черновик
-  let is_intake = redact(to_string(starts_with(text, "прими сайт ")), "hash_only")
-  if is_intake == REF_TRUE {
-    let url = substring(text, to_float(to_string(len("прими сайт "))), to_float(to_string(len(text))))
-    let url_ok = redact(to_string(starts_with(url, "https://") or starts_with(url, "http://")), "hash_only")
-    if url_ok != REF_TRUE {
-      let _ = SecReply("Адрес должен начинаться с https:// (или http:// для проверки).")
-      return "200 {}"
-    }
-    let rep = intake.IntakeCommand(url)
-    let _ = SecReply(rep)
-    return "200 {}"
+  // 5) команда → ответ владельцу. A.3 наряда #50: сбой обработки одного
+  //    обновления не зацикливает Telegram — обновление ACKается 200,
+  //    владелец громко получает стабильный класс ошибки
+  //    (TryResult.error.code, ADR-0142/№385: SQL_ERROR, RUNTIME_ERROR, … —
+  //    проба на 0.38.3: r.error.code читается, полный текст остаётся в
+  //    логе сервера строкой «[try] caught error: …» плюс print ниже).
+  //    Ошибку не прячем: класс уходит владельцу, причина — в логе.
+  let d = try SecDispatch(text)
+  let d_ok = redact(to_string(d.ok), "hash_only")
+  if d_ok == REF_TRUE {
+    // allow(unchecked_result): ok-гвард выше через redact-барьер (№802)
+    return d.value
   }
-  // /app (АСС-2.2): кнопка уходит швом send_message с reply_markup;
-  // текстовый ответ — только при «не настроено»/ошибке (кнопка — не текст)
-  let c_app = redact(to_string(text == "/app"), "hash_only")
-  if c_app == REF_TRUE {
-    let r = SecSendAppButton()
-    let app_ok = redact(to_string(r == "ok"), "hash_only")
-    if app_ok == REF_TRUE {
-      return "200 {}"
-    }
-    let _ = SecReply(r)
-    return "200 {}"
-  }
-  let reply = SecHandleText(text)
-  let sent = SecReply(reply)
-  let sent_ok = redact(to_string(sent == "ok"), "hash_only")
-  if sent_ok == REF_TRUE {
-    return "200 {}"
-  }
+  let code = redact(to_string(d.error.code), "all")
+  print("[sec] ошибка обработки команды: " + code)
+  let _ = try SecReply("Ошибка обработки команды: " + code)
   return "200 {}"
 }

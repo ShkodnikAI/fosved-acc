@@ -1,6 +1,9 @@
 // B.1 — нативное расписание (cron API, REFERENCE §4.17.3).
 // Проверяет: регистрация задания, видимость в списке, ручной запуск
 // (cron_run + cron_mark_fired → run_count), удаление.
+// АСС-1.10 (наряд #38, B.3): с 0.38.0 cron_run — carrier human-oversight
+// (ADR-0205): перед cron_run проба ставит мандат approval_issue
+// ("actor", "carrier:cron_run", ttl) — форма из docs/upgrade.md Metalogos.
 // Срабатывание по времени идёт только в `mlog serve` (scheduler tick 5 с) —
 // в этой пробе не проверяется, см. отчёт.
 pattern Main1(x: String) -> String {
@@ -12,6 +15,7 @@ pattern Main1(x: String) -> String {
     if to_string(j.id) == id then { let found = true }
   }
   if found == false then { return "FAIL 01-schedule: задания нет в cron_list" }
+  let mandate = approval_issue("probe", "carrier:cron_run", 60)
   let r1 = cron_run(id)
   let r2 = cron_mark_fired(id)
   let mut runs = -1.0

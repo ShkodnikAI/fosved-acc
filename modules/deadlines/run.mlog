@@ -1,3 +1,4 @@
+profile capability { allow_carrier: "send_message" allow_carrier: "http_post" allow_carrier: "exec_argv" }
 // Дедлайны (наряд АСС-1.4, A.2+A.3): суточные проверки сроков сертификата
 // и регистрации домена, запись в deadlines, события порогов warn_days.
 //

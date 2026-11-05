@@ -1,3 +1,4 @@
+profile capability { allow_carrier: "http_post" }
 // Тесты allowlist (наряд АСС-2.1, A.3). Запуск: tests/allowlist/run.sh.
 // Ожидаемо: POLYGON allowlist 6/6.
 //

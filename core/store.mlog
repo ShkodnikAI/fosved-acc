@@ -69,15 +69,19 @@ pattern SiteDb(slug: String) -> String {
 }
 
 pattern SiteInit(slug: String) -> String {
-  let REF_TRUE = redact(to_string(true), "hash_only")
   let _ = SiteDb(slug)
-  // Таблицы живут в файле сайта и переживают запросы; маркер «инициализировано»
-  // — на процесс (kv общий между запросами). После рестарта маркер пуст —
-  // CREATE IF NOT EXISTS отрабатывает заново безвредно. Ключ маркера —
-  // по slug (алиас site один на все сайты, ключом схемы больше не
-  // различить).
-  let inited = redact(to_string(kv_exists("acc_inited_" + slug)), "hash_only")
-  if inited == REF_TRUE { return "ok" }
+  // A.2 наряда #50: «инициализировано» решает САМ ФАЙЛ, не kv. Проба A.1
+  // (05.11, пять ног на одном data-каталоге): kv-маркер acc_inited_<slug>
+  // ПЕРЕЖИВАЕТ рестарт на 0.33.2 и 0.38.3 — persist data/memory.db
+  // (app.mlog memory { persist }) читается обратно обоими бинарями,
+  // вопреки прежнему комментарию «после рестарта маркер пуст». Ранний
+  // return по маркеру при файле сайта без таблиц навсегда блокировал
+  // CREATE — прод-инцидент 05.11: POST /tg → 500 no such table:
+  // site.incidents (пробы L3/L4 — та же подпись на обоих бинарях).
+  // CREATE TABLE IF NOT EXISTS идемпотентны и дёшевы — выполняем при
+  // каждом вызове; kv-маркер остаётся диагностической записью, решающей
+  // роли больше не играет. Ключ маркера — по slug (алиас site один на
+  // все сайты, ключом схемы больше не различить).
   let g = grant_issue("db:insert:site.tables", 60, "unlimited")
   let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS site.health_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, url TEXT, status INTEGER, ms REAL, text_ok INTEGER, error TEXT)", [])
   let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS site.deadlines (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, subject TEXT, expires TEXT, source TEXT, checked_ts REAL)", [])
