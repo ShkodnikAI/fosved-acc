@@ -2,8 +2,8 @@
 # Бинарь Metalogos закреплён по версии и SHA256 (тот же релиз, что в tega-platform
 # и FOSVED-office-v2). mlog требует glibc >= 2.39 и libssl3 -> Ubuntu 24.04.
 FROM ubuntu:24.04
-ARG MLOG_VERSION=v0.38.1
-ARG MLOG_SHA256=9d1b2f8aa16b81ba146609136697389de06ed3bc447c7c6c19d2f0c66976b7ad
+ARG MLOG_VERSION=v0.38.2
+ARG MLOG_SHA256=b6cfb8c3128627e13652ba717fbbe7881b83952c2790cb168ffde37dbe010faf
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl libssl3 python3 \
