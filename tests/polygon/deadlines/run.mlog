@@ -1,4 +1,3 @@
-profile capability { allow_carrier: "send_message" allow_carrier: "http_post" allow_carrier: "exec_argv" }
 // Полигон Дедлайнов (наряд АСС-1.4, A.4). Запуск: tests/polygon/deadlines/run.sh
 // (поднимает отдельное дерево с фикстурами вместо сети и
 // METALOGOS_ALLOW_EXEC=1 — exec в run-режиме; продуктовые файлы не трогаются).

@@ -1,4 +1,3 @@
-profile capability { allow_carrier: "http_post" allow_carrier: "exec_argv" }
 // Юниты разведки (наряд АСС-2.5, A.3; ремонт — наряд АСС-1.9 #33).
 // Запуск: tests/intake/run.sh (поднимает фейк-сайты 18488/18489 и
 // METALOGOS_ALLOW_EXEC/ALLOW_PRIVATE — только в тесте).
