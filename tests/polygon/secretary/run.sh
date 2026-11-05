@@ -67,6 +67,13 @@ if [ "$up" != "1" ]; then
 fi
 
 BASE="http://127.0.0.1:18457"
+
+# 2б) засев мок-шва в serve-процессе (наряд АСС-1.13): run-полоса на
+# 0.34–0.38.x не материализует memory { persist }, засев prologue
+# (kv acc_mock_send=1) до serve не доживает. На 0.33.2 ряд уже есть —
+# повторный kv_set идемпотентен. Секреты шва не меняются.
+curl -s -o /dev/null -X POST "$BASE/test/seed"
+
 ok=0
 fail=0
 mark() { if [ "$1" = "$2" ]; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAIL: $3 (got [$1], want [$2])"; fi }
