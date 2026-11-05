@@ -37,12 +37,17 @@ for f in data/acc.db data/memory.db; do
     echo "INTAKEAPI FAIL: $f уже существует — нужен чистый data/ (в CI чекаут свежий)"; exit 1
   fi
 done
-if [ -e data/sites ] || [ -e data/registry ]; then
-  echo "INTAKEAPI FAIL: data/sites или data/registry уже существует"; exit 1
+if [ -e data/registry ]; then
+  echo "INTAKEAPI FAIL: data/registry уже существует"; exit 1
 fi
+# NB: data/sites в джобе store — общая по шагам (изоляция #44 оставляет
+# aa/bb); моему тесту leftover-каталоги без passport.json безвредны, но
+# дерево пересоздаём заново — фикстуры не должны видеть чужие паспорта
+rm -rf data/sites
 
-mkdir -p data/registry data/miniapp-static data/sites/journal data/sites/one data/sites/tfake
+mkdir -p data/registry data/miniapp-static
 cp modules/miniapp/static/app.html modules/miniapp/static/app.js modules/miniapp/static/app.css data/miniapp-static/
+mkdir -p data/sites/journal data/sites/one data/sites/tfake
 # реестр источников — для правила 9 валидатора (файл обязан существовать)
 cat > data/registry/sources.json <<'EOS'
 [
