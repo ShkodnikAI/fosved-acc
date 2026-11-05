@@ -97,6 +97,16 @@ jobs:
         run: bash tests/registry/check.sh mlog
       - name: Реестры через Mini App (АСС-2.4 A.3) — 5/5, мок GitHub
         run: bash tests/registryapi/run.sh mlog | tee registryapi.out | grep -q "REGISTRYAPI OK 5/5"
+      - name: Приём через Mini App (АСС-2.6 A.5) — 6/6, мок GitHub + рестарт крона
+        # вывод харнесса в лог всегда, гейт явный (урок молчаливых отказов
+        # intake-джобы, 22.10)
+        run: |
+          set +e
+          bash tests/intakeapi/run.sh mlog 2>&1 | tee intakeapi.out
+          rc=$?
+          echo "=== harness rc=$rc, хвост intakeapi.out: ==="
+          tail -30 intakeapi.out
+          grep -q "INTAKEAPI OK 6/6" intakeapi.out
 
   serve:
     name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"

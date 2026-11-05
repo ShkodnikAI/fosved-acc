@@ -148,16 +148,34 @@ pattern CheckSources(j: Any) -> String {
   if redact(to_string(type_of(srcs) == "List"), "hash_only") == redact(to_string(false), "hash_only") {
     return "sources: должен быть массивом идентификаторов"
   }
-  if redact(to_string(file_exists("registry/sources.json")), "hash_only") == redact(to_string(false), "hash_only") {
-    return "sources: реестр registry/sources.json не найден"
+  // АСС-2.6: валидатор вызывается и из serve (приём сайта через Mini App).
+  // Песочница №455 разрешает чтения только внутри data/ — репо-путь
+  // "registry/sources.json" в serve нечитаем (SANDBOX_SENSITIVE_PATH, проба
+  // наряда), поэтому фолбэк на зеркало data/registry/sources.json: его
+  // раскладывает из репо сид на каждом старте (scripts/seed-data.sh,
+  // АСС-1.11 A.2), содержимое идентично. Порядок: репо-файл (run/CI),
+  // при неудаче чтения/разбора — зеркало (serve).
+  let r1 = try parse_json(read_file("registry/sources.json"))
+  let r1_ok = redact(to_string(r1.ok), "hash_only")
+  let mut reg = []
+  if r1_ok == REF_TRUE {
+    // allow(unchecked_result): ok-гвард выше через redact-барьер (№802)
+    let v1 = r1.value
+    reg = v1
   }
-  let rj = try parse_json(read_file("registry/sources.json"))
-  if redact(to_string(rj.ok == false), "hash_only") == REF_TRUE {
-    return "sources: реестр registry/sources.json — невалидный JSON"
+  let use_mirror = redact(to_string(r1_ok != REF_TRUE), "hash_only")
+  if use_mirror == REF_TRUE {
+    let r2 = try parse_json(read_file("data/registry/sources.json"))
+    let r2_ok = redact(to_string(r2.ok), "hash_only")
+    if r2_ok == REF_TRUE {
+      // allow(unchecked_result): ok-гвард выше через redact-барьер (№802)
+      let v2 = r2.value
+      reg = v2
+    }
   }
-  let reg = rj.value // allow(unchecked_result): выход выше при rj.ok == false — гвард через redact-барьер (№802)
-  if redact(to_string(type_of(reg) == "List"), "hash_only") == redact(to_string(false), "hash_only") {
-    return "sources: реестр registry/sources.json должен быть массивом"
+  let not_found = redact(to_string(type_of(reg) != "List"), "hash_only")
+  if not_found == REF_TRUE {
+    return "sources: реестр registry/sources.json не найден или нечитаем"
   }
   each src in srcs {
     let mut found = 0.0

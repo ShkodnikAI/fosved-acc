@@ -119,6 +119,238 @@ var ACC = {
     var self = this;
     return list.map(function (s) { return self.siteCard(s); }).join("") +
       '<button class="tab" id="refresh">Обновить</button>';
+  },
+
+  // ── АСС-2.6: вкладка «Приём» (опросник, переменные, прогон, «Принять») ──
+
+  // паспорт по умолчанию из черновика (A.1): поля found_auto — из черновика,
+  // остальные — дефолты наряда (modules, warn_days, profile, participation,
+  // uptime_every_min); чистая функция — тестируется в node
+  passportFromDraft: function (draft) {
+    var d = draft || {};
+    return {
+      slug: d.slug || "",
+      name: d.name || "",
+      url: d.url || "",
+      languages: d.languages || [],
+      timezone: d.timezone || "",
+      people: {
+        approver_tg_env: (d.people && d.people.approver_tg_env) || "ACC_OWNER_TG_ID",
+        editor_tg_env: (d.people && d.people.editor_tg_env) || null,
+        expert_tg_env: (d.people && d.people.expert_tg_env) || null
+      },
+      repo: {
+        github: (d.repo && d.repo.github) || "",
+        branch: (d.repo && d.repo.branch) || "main",
+        deploy: (d.repo && d.repo.deploy) || "render_hook",
+        health_url: (d.repo && d.repo.health_url) || "",
+        key_envs: (d.repo && d.repo.key_envs) || []
+      },
+      checks: {
+        uptime_every_min: (d.checks && d.checks.uptime_every_min) || 5,
+        daily_at: (d.checks && d.checks.daily_at) || "07:00",
+        pages: (d.checks && d.checks.pages) || []
+      },
+      modules: d.modules || ["duty", "deadlines", "secretary"],
+      limits: (d.limits && d.limits.tokens_per_day !== undefined) ? d.limits : { tokens_per_day: 0, deploys_per_day: 0 },
+      domain: {
+        registrar: (d.domain && d.domain.registrar) || null,
+        registrar_panel_url: (d.domain && d.domain.registrar_panel_url) || null,
+        expires: (d.domain && d.domain.expires) || null,
+        expires_source: (d.domain && d.domain.expires_source) || "auto",
+        cert_expires: (d.domain && d.domain.cert_expires) || null,
+        autorenew: (d.domain && d.domain.autorenew) || null,
+        dns_provider: (d.domain && d.domain.dns_provider) || null,
+        warn_days: (d.domain && d.domain.warn_days) || [60, 30, 7],
+        renewal_owner: (d.domain && d.domain.renewal_owner) || "owner"
+      },
+      profile: d.profile || "showcase",
+      participation: d.participation || "pr_with_approval",
+      platform: {
+        adapter: (d.platform && d.platform.adapter) || null,
+        cdn: (d.platform && d.platform.cdn) || null
+      },
+      models: d.models || { policy: "router", allow: [], deny: [], tokens_per_day: 0 },
+      sources: d.sources || []
+    };
+  },
+
+  foundMark: function (draft, path) {
+    // «найдено автоматически» у полей из found_auto (A.1)
+    var fa = (draft && draft.found_auto) || [];
+    if (fa.indexOf(path) !== -1) {
+      return '<span class="found-mark">найдено автоматически</span>';
+    }
+    return "";
+  },
+
+  envHint: function (name) {
+    // назначение и минимальные права переменной хостинга (A.2); значение
+    // нигде не вводится — только имя (правило 8 паспорта)
+    var n = String(name || "");
+    if (/GITHUB/i.test(n)) {
+      return "токен GitHub сайта — Contents: Read and write, Pull requests: Read and write (PR паспорта/реестров сайта)";
+    }
+    if (/TG|TELEGRAM/i.test(n)) {
+      return "Telegram id человека (значение — id, не токен)";
+    }
+    if (/TOKEN|KEY|SECRET|PASSWORD/i.test(n)) {
+      return "ключ сайта — минимальные достаточные права по назначению переменной";
+    }
+    return "переменная сайта — минимальные достаточные права по назначению";
+  },
+
+  envBlock: function (p) {
+    // блок «Что внести в хостинг АСС» (A.2): имена без значений,
+    // назначение и минимальные права, ссылка на Environment в Render
+    var self = this;
+    var rows = "";
+    var names = (p && p.repo && p.repo.key_envs) || [];
+    names.forEach(function (n) {
+      rows += '<div class="env-row"><code>' + self.esc(n) + '</code><div class="muted">' + self.esc(self.envHint(n)) + "</div></div>";
+    });
+    if (p && p.people) {
+      ["approver_tg_env", "editor_tg_env", "expert_tg_env"].forEach(function (k) {
+        if (p.people[k]) {
+          rows += '<div class="env-row"><code>' + self.esc(p.people[k]) + '</code><div class="muted">Telegram id человека (значение — только id)</div></div>';
+        }
+      });
+    }
+    if (!rows) {
+      rows = '<div class="muted">Переменных сайта паспорт не требует (repo.key_envs пуст)</div>';
+    }
+    return '<div class="card env-block"><div class="site-name">Что внести в хостинг АСС</div>' + rows +
+      // NB: гиперссылки на dashboard.render.com здесь нет — гард АСС-2.2
+      // запрещает внешние URL в статике (CSP default-src 'self'); указатель
+      // текстом: Render → сервис АСС → Environment
+      '<div class="muted">Значения не вводятся здесь — только на странице Environment сервиса АСС у хостинга (Render: ваш сервис → Environment). Значения вносятся по именам из этого списка.</div></div>';
+  },
+
+  intakeCard: function (d) {
+    var acc = d && d.accept ? d.accept : null;
+    var st = "";
+    if (acc && acc.status === "pr_open" && acc.pr_url) {
+      st = '<div class="dl">PR: <a href="' + this.esc(acc.pr_url) + '">' + this.esc(acc.pr_url) + "</a></div>";
+    }
+    var date = d && d.updated_ts ? new Date(Number(d.updated_ts) * 1000).toLocaleString() : "";
+    return '<div class="card intake-card">' +
+      '<div class="site-name">' + this.esc((d && d.url) || "?") + "</div>" +
+      '<div class="checked muted">' + this.esc(date) + "</div>" + st +
+      '<button class="tab intake-open" data-url="' + this.esc((d && d.url) || "") + '">Заполнить опросник</button>' +
+      "</div>";
+  },
+
+  renderIntake: function (list) {
+    if (!list || !list.length) {
+      return '<div class="empty">Черновиков нет — подайте заявку боту: «прими сайт <адрес>»</div>' +
+        '<button class="tab" id="intake-refresh">Обновить</button>';
+    }
+    var self = this;
+    return list.map(function (d) { return self.intakeCard(d); }).join("") +
+      '<button class="tab" id="intake-refresh">Обновить</button>';
+  },
+
+  trialPage: function (p) {
+    // строка результата прогона по странице (A.3): статус, время, текст
+    var cls = p && p.verdict === "ok" ? "ok" : "err";
+    var names = { ok: "ok", down: "недоступна", no_text: "текст не найден", slow: "медленно" };
+    var v = p && p.verdict ? (names[p.verdict] || p.verdict) : "?";
+    var ms = p && p.ms !== undefined ? String(Math.round(Number(p.ms))) : "?";
+    return '<div class="trial-row"><span class="dl-dot ' + cls + '"></span>' + this.esc(p.path || "?") +
+      ': <span class="' + cls + '">' + this.esc(v) + "</span> (" + this.esc(ms) + " мс)</div>";
+  },
+
+  trialBlock: function (t) {
+    // результат пробного прогона целиком (A.3)
+    var self = this;
+    var badge = t && t.green
+      ? '<div class="trial-green">Прогон зелёный — можно принимать</div>'
+      : '<div class="trial-red">Прогон красный — принять нельзя (или отметьте «принять с замечаниями»)</div>';
+    var rows = "";
+    if (t && t.pages) {
+      rows += t.pages.map(function (p) { return self.trialPage(p); }).join("");
+    }
+    if (t && t.health) {
+      rows += this.trialPage({ path: "health_url", verdict: t.health.verdict, ms: t.health.ms });
+    }
+    var dl = t && t.deadlines ? t.deadlines : {};
+    rows += this.deadlineItem("домен", dl.domain);
+    rows += this.deadlineItem("сертификат", dl.cert);
+    if (t && t.notes && t.notes.length) {
+      rows += t.notes.map(function (n) { return '<div class="trial-note">' + self.esc(n) + "</div>"; }).join("");
+    }
+    return '<div class="card trial-result">' + badge + rows + "</div>";
+  },
+
+  fieldRow: function (label, path, value, draft, extra) {
+    // строка формы: подпись + пометка found_auto + поле + место ошибки
+    var v = value === null || value === undefined ? "" : String(value);
+    return '<label class="pf-row"><span class="pf-label">' + this.esc(label) + " " + this.foundMark(draft, path) + "</span>" +
+      '<input class="pf" data-path="' + this.esc(path) + '" value="' + this.esc(v) + '"' + (extra || "") + ">" +
+      '<span class="field-err" data-err-for="' + this.esc(path) + '"></span></label>';
+  },
+
+  intakeFormHtml: function (draft, passport) {
+    // форма паспорта по полям ADR-0002, группы — шаги 3–6 ТЗ §5 (A.1)
+    var self = this;
+    var p = passport;
+    var draftUrl = (draft && draft.url) || "";
+    var pagesText = (p.checks.pages || []).map(function (pg) { return pg.path + " | " + pg.expect_text; }).join("\n");
+    function sec(title, inner) {
+      return '<details class="pf-sec" open><summary>' + self.esc(title) + "</summary>" + inner + "</details>";
+    }
+    var common = this.fieldRow("slug", "slug", p.slug, draft) +
+      this.fieldRow("название", "name", p.name, draft) +
+      this.fieldRow("адрес сайта (https)", "url", p.url, draft) +
+      this.fieldRow("языки (через запятую)", "languages", (p.languages || []).join(", "), draft) +
+      this.fieldRow("таймзона", "timezone", p.timezone, draft);
+    var people = this.fieldRow("согласующий (*_tg_env)", "people.approver_tg_env", p.people.approver_tg_env, draft) +
+      this.fieldRow("редактор (*_tg_env)", "people.editor_tg_env", p.people.editor_tg_env, draft) +
+      this.fieldRow("эксперт (*_tg_env)", "people.expert_tg_env", p.people.expert_tg_env, draft);
+    var repo = this.fieldRow("GitHub (owner/repo)", "repo.github", p.repo.github, draft) +
+      this.fieldRow("ветка", "repo.branch", p.repo.branch, draft) +
+      this.fieldRow("деплой", "repo.deploy", p.repo.deploy, draft) +
+      this.fieldRow("health_url (https)", "repo.health_url", p.repo.health_url, draft) +
+      this.fieldRow("переменные сайта (имена, через запятую)", "repo.key_envs", (p.repo.key_envs || []).join(", "), draft);
+    var checks = this.fieldRow("период проверки (мин)", "checks.uptime_every_min", p.checks.uptime_every_min, draft) +
+      this.fieldRow("суточная проверка (ЧЧ:ММ)", "checks.daily_at", p.checks.daily_at, draft) +
+      '<label class="pf-row"><span class="pf-label">страницы (путь | ожидаемый текст) ' + this.foundMark(draft, "checks.pages") + '</span>' +
+      '<textarea class="pf pf-pages" data-path="checks.pages">' + this.esc(pagesText) + '</textarea>' +
+      '<span class="field-err" data-err-for="checks.pages"></span></label>';
+    var mods = this.fieldRow("модули (через запятую)", "modules", (p.modules || []).join(", "), draft) +
+      this.fieldRow("лимит токенов/сутки", "limits.tokens_per_day", p.limits.tokens_per_day, draft) +
+      this.fieldRow("лимит деплоев/сутки", "limits.deploys_per_day", p.limits.deploys_per_day, draft);
+    var domain = this.fieldRow("регистратор", "domain.registrar", p.domain.registrar, draft) +
+      this.fieldRow("панель регистратора", "domain.registrar_panel_url", p.domain.registrar_panel_url, draft) +
+      this.fieldRow("срок домена (ГГГГ-ММ-ДД)", "domain.expires", p.domain.expires, draft) +
+      this.fieldRow("срок сертификата (ГГГГ-ММ-ДД)", "domain.cert_expires", p.domain.cert_expires, draft) +
+      this.fieldRow("автопродление (да/нет)", "domain.autorenew", p.domain.autorenew, draft) +
+      this.fieldRow("DNS-провайдер", "domain.dns_provider", p.domain.dns_provider, draft) +
+      this.fieldRow("пороги дней (по убыванию)", "domain.warn_days", (p.domain.warn_days || []).join(", "), draft) +
+      this.fieldRow("ответственный за продление", "domain.renewal_owner", p.domain.renewal_owner, draft);
+    var prof = this.fieldRow("профиль (showcase|service|ugc|paid)", "profile", p.profile, draft) +
+      this.fieldRow("участие (pr_with_approval|report_only)", "participation", p.participation, draft) +
+      this.fieldRow("адаптер платформы (render|home-server)", "platform.adapter", p.platform.adapter, draft) +
+      this.fieldRow("CDN", "platform.cdn", p.platform.cdn, draft);
+    var models = this.fieldRow("политика моделей", "models.policy", p.models.policy, draft) +
+      this.fieldRow("модели — разрешено", "models.allow", (p.models.allow || []).join(", "), draft) +
+      this.fieldRow("модели — запрещено", "models.deny", (p.models.deny || []).join(", "), draft) +
+      this.fieldRow("токенов/сутки", "models.tokens_per_day", p.models.tokens_per_day, draft) +
+      this.fieldRow("источники (id, через запятую)", "sources", (p.sources || []).join(", "), draft);
+    return '<div class="card intake-form" data-url="' + this.esc(draftUrl) + '">' +
+      '<div class="site-name">Опросник приёма: ' + this.esc(draftUrl) + "</div>" +
+      sec("Общее", common) + sec("Люди (только имена переменных *_tg_env)", people) +
+      sec("Репозиторий и деплой", repo) + sec("Проверки", checks) +
+      sec("Модули и лимиты", mods) + sec("Домен", domain) +
+      sec("Профиль и платформа", prof) + sec("Модели и источники", models) +
+      this.envBlock(p) +
+      '<div class="intake-actions"><button class="tab" id="intake-trial">Проверить</button>' +
+      '<label class="with-notes"><input type="checkbox" id="intake-with-notes"> принять с замечаниями</label>' +
+      '<button class="tab" id="intake-accept" disabled>Принять на обслуживание</button></div>' +
+      '<div class="trial-out"></div>' +
+      '<div class="msg intake-msg"></div>' +
+      '<button class="tab" id="intake-back">К списку черновиков</button>' +
+      "</div>";
   }
 };
 
@@ -146,7 +378,134 @@ if (typeof document !== "undefined") {
         .catch(function () { show("Сеть недоступна", true); });
     }
 
-    var TITLES = { sites: "Сайты", models: "Модели", sources: "Источники" };
+    var TITLES = { sites: "Сайты", intake: "Приём", models: "Модели", sources: "Источники" };
+
+    // ── АСС-2.6: сбор паспорта из формы ──
+    function setDeep(obj, path, value) {
+      var parts = path.split(".");
+      var cur = obj;
+      for (var i = 0; i < parts.length - 1; i++) {
+        if (!cur[parts[i]] || typeof cur[parts[i]] !== "object") {
+          cur[parts[i]] = {};
+        }
+        cur = cur[parts[i]];
+      }
+      cur[parts[parts.length - 1]] = value;
+    }
+
+    function collectPassport(root, draft) {
+      // дефолт — из черновика (чистая функция ACC.passportFromDraft),
+      // затем поля формы (data-path); пустые значения nullable-полей — null
+      var p = ACC.passportFromDraft(draft);
+      var lists = { languages: 1, modules: 1, "domain.warn_days": 1, sources: 1, "repo.key_envs": 1, "models.allow": 1, "models.deny": 1 };
+      var nums = { "checks.uptime_every_min": 1, "limits.tokens_per_day": 1, "limits.deploys_per_day": 1, "models.tokens_per_day": 1 };
+      Array.prototype.forEach.call(root.querySelectorAll(".pf"), function (inp) {
+        var path = inp.getAttribute("data-path");
+        if (!path) { return; }
+        var val = inp.value;
+        if (path === "checks.pages") {
+          var pages = [];
+          val.split("\n").forEach(function (ln) {
+            var t = ln.trim();
+            if (!t) { return; }
+            var sep = t.indexOf("|");
+            if (sep === -1) {
+              pages.push({ path: t, expect_text: "" });
+            } else {
+              pages.push({ path: t.slice(0, sep).trim(), expect_text: t.slice(sep + 1).trim() });
+            }
+          });
+          setDeep(p, path, pages);
+          return;
+        }
+        var v = val.trim();
+        if (lists[path]) {
+          setDeep(p, path, v ? v.split(/[,;]/).map(function (x) { return x.trim(); }).filter(function (x) { return x; }) : []);
+          return;
+        }
+        if (nums[path]) {
+          setDeep(p, path, v === "" ? 0 : Number(v) || 0);
+          return;
+        }
+        setDeep(p, path, v === "" ? null : v);
+      });
+      return p;
+    }
+
+    function postIntake(path, payload, cb) {
+      fetch(path, {
+        method: "POST",
+        headers: { "X-ACC-Session": token, "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) {
+        return r.json().then(function (j) { cb(r.status, j); });
+      }).catch(function () { cb(0, { error: "сеть" }); });
+    }
+
+    function showFieldErrors(root, j) {
+      Array.prototype.forEach.call(root.querySelectorAll(".field-err"), function (el) {
+        el.textContent = "";
+      });
+      if (j && j.ok === false && j.field) {
+        var el = root.querySelector('[data-err-for="' + j.field + '"]');
+        if (el) {
+          el.textContent = j.error || "ошибка";
+        }
+      }
+    }
+
+    function wireIntakeForm(draftUrl, draft) {
+      var form = view.querySelector(".intake-form");
+      if (!form) { return; }
+      var out = form.querySelector(".intake-msg");
+      var trialOut = form.querySelector(".trial-out");
+      var acceptBtn = form.querySelector("#intake-accept");
+      var withNotes = form.querySelector("#intake-with-notes");
+      var lastGreen = false;
+      // проверка на лету (A.1): изменение любого поля → validate
+      var timer = null;
+      Array.prototype.forEach.call(form.querySelectorAll(".pf"), function (inp) {
+        inp.addEventListener("change", function () {
+          clearTimeout(timer);
+          timer = setTimeout(function () {
+            postIntake("/api/intake/" + encodeURIComponent(draftUrl) + "/validate", { passport: collectPassport(form, draft) }, function (status, j) {
+              showFieldErrors(form, j);
+            });
+          }, 300);
+        });
+      });
+      withNotes.addEventListener("change", function () {
+        acceptBtn.disabled = !(lastGreen || withNotes.checked);
+      });
+      // пробный прогон (A.3): серверный, по страницам черновика
+      form.querySelector("#intake-trial").addEventListener("click", function () {
+        out.textContent = "Прогон…";
+        postIntake("/api/intake/" + encodeURIComponent(draftUrl) + "/trialrun", {}, function (status, t) {
+          if (status !== 200 || !t || t.ok !== true) {
+            out.textContent = "Ошибка прогона: " + ((t && t.error) || status);
+            return;
+          }
+          out.textContent = "";
+          lastGreen = t.green === true;
+          acceptBtn.disabled = !(lastGreen || withNotes.checked);
+          trialOut.innerHTML = ACC.trialBlock(t);
+        });
+      });
+      // «Принять на обслуживание» (A.4)
+      acceptBtn.addEventListener("click", function () {
+        out.textContent = "Создаём PR…";
+        postIntake("/api/intake/" + encodeURIComponent(draftUrl) + "/accept", { passport: collectPassport(form, draft), with_notes: withNotes.checked }, function (status, j) {
+          if (status === 200 && j && j.pr_url) {
+            out.innerHTML = 'Создан PR: <a href="' + ACC.esc(j.pr_url) + '">' + ACC.esc(j.pr_url) + "</a>";
+          } else {
+            out.textContent = "Ошибка: " + ((j && j.error) || status);
+          }
+        });
+      });
+      form.querySelector("#intake-back").addEventListener("click", function () {
+        render("intake");
+      });
+    }
 
     function wire(view) {
       // двухшаговое подтверждение операций и отправка формы
@@ -223,6 +582,30 @@ if (typeof document !== "undefined") {
             view.innerHTML = ACC.renderSites(list);
             var btn = document.getElementById("refresh");
             if (btn) { btn.addEventListener("click", function () { render("sites"); }); }
+          }
+        });
+        return;
+      }
+      if (tab === "intake") {
+        view.innerHTML = '<p class="msg">Загрузка…</p>';
+        api("/api/intake/drafts", function (status, list) {
+          if (status === 200) {
+            view.innerHTML = ACC.renderIntake(list);
+            var rf = document.getElementById("intake-refresh");
+            if (rf) { rf.addEventListener("click", function () { render("intake"); }); }
+            Array.prototype.forEach.call(view.querySelectorAll(".intake-open"), function (b) {
+              b.addEventListener("click", function () {
+                var url = b.getAttribute("data-url");
+                api("/api/intake/" + encodeURIComponent(url), function (s2, j) {
+                  if (s2 === 200 && j && j.draft) {
+                    view.innerHTML = ACC.intakeFormHtml(j.draft, ACC.passportFromDraft(j.draft));
+                    wireIntakeForm(url, j.draft);
+                  } else {
+                    show("Черновик недоступен", true);
+                  }
+                });
+              });
+            });
           }
         });
         return;
