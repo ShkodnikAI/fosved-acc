@@ -9,6 +9,7 @@
 //   /test/summary      — SecSummaryOnce (утренняя сводка)
 //   /test/event-count?slug&kind  — событий вида kind в events сайта
 //   /test/pending-count?slug&kind — недоставленных (sent_ts IS NULL)
+//   /test/seed (POST) — засев мок-шва kv acc_mock_send=1 (наряд АСС-1.13)
 // Прямых имён схем нет — только через st.SiteDb(slug) (гард A.4.3).
 
 import core/store as st
@@ -25,6 +26,15 @@ mlogserver {
   route "/tg" method=POST {
     let r = bot.SecWebhook()
     return respond(redact(r, "all"))
+  }
+
+  route "/test/seed" method=POST {
+    // АСС-1.13: run-полоса на 0.34–0.38.x не материализует memory { persist },
+    // поэтому засев prologue (kv acc_mock_send=1) до serve не доживает.
+    // Сеем в serve-процессе — в ту же kv, которую читает SecSend (bot.mlog).
+    // На 0.33.2 ряд уже есть от prologue — повторный kv_set идемпотентен.
+    let _ = kv_set("acc_mock_send", "1")
+    return respond("200 seeded")
   }
 
   route "/test/mock-count" method=GET {
