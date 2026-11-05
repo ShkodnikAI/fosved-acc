@@ -11,6 +11,8 @@ profile capability { allow_carrier: "send_message" allow_carrier: "http_post" al
 //   /test/event-count?slug&kind  — событий вида kind в events сайта
 //   /test/pending-count?slug&kind — недоставленных (sent_ts IS NULL)
 //   /test/seed (POST) — засев мок-шва kv acc_mock_send=1 (наряд АСС-1.13)
+//   /test/damage (POST) — состояние прод-инцидента #50: файл сайта без
+//      таблиц + маркер kv (сценарий 6 — A.3: сбой обработки → 200 + класс ошибки)
 // Прямых имён схем нет — только через st.SiteDb(slug) (гард A.4.3).
 
 import core/store as st
@@ -36,6 +38,19 @@ mlogserver {
     // На 0.33.2 ряд уже есть от prologue — повторный kv_set идемпотентен.
     let _ = kv_set("acc_mock_send", "1")
     return respond("200 seeded")
+  }
+
+  route "/test/damage" method=POST {
+    // A.3 наряда #50: воспроизводим состояние прод-инцидента 05.11 —
+    // файл сайта БЕЗ таблиц при выставленном kv-маркере acc_inited_tega
+    // (сайт уже инициализирован сценарием 3; запись пустой строки поверх
+    // site.db — тот же эффект, что повреждённый файл: ATTACH открывает
+    // пустую БД). SiteInit на /status-пути не вызывается, StSiteColor
+    // падает SQL_ERROR; после A.3 SecWebhook обязан ACKать 200 и сообщить
+    // владельцу класс ошибки (сценарий 6 run.sh).
+    let _ = kv_set("acc_inited_tega", "1")
+    let _ = write_file("data/sites/tega/site.db", "")
+    return respond("200 damaged")
   }
 
   route "/test/mock-count" method=GET {

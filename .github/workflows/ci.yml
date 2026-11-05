@@ -71,6 +71,13 @@ jobs:
           cp data/sites/aa/site.db data/sites/bb/site.db
           mlog run tests/store/isolation_swap.mlog 2> swap.err | tee swap.out | grep -q "SWAP OK=1 FAIL=0"
           grep -q "SiteDb: файл принадлежит другому сайту" swap.err
+      - name: Самолечение SiteInit — файл без таблиц + kv-маркер (наряд #50, A.2)
+        run: |
+          mkdir -p data/sites/ha
+          rm -f data/sites/ha/site.db data/sites/ha/site.db-wal data/sites/ha/site.db-shm
+          set -o pipefail
+          mlog run tests/store/heal.mlog 2> heal.err | tee heal.out | grep -q "HEAL OK=5 FAIL=0"
+          # мутация «вернуть ранний return по kv-маркеру» делает шаг красным
       - name: Гард прямых имён схем (A.4.3)
         run: ./scripts/check_store_access.sh
       - name: Живучесть ATTACH при serve (A.2) — 50 посл. + 20 парал.
@@ -86,7 +93,7 @@ jobs:
       - name: Полигон Дедлайнов (АСС-1.4 A.4) — 5/5
         run: bash tests/polygon/deadlines/run.sh mlog | tee polygon-deadlines.out | grep -q "POLYGON deadlines 5/5"
       - name: Полигон Секретаря (АСС-1.5 A.5) — 5/5
-        run: bash tests/polygon/secretary/run.sh mlog | tee polygon-secretary.out | grep -q "POLYGON secretary 5/5"
+        run: bash tests/polygon/secretary/run.sh mlog | tee polygon-secretary.out | grep -q "POLYGON secretary 6/6"
       - name: Полигон «мёртвой руки» (АСС-1.6 A.3) — 3/3
         run: bash tests/polygon/heartbeat/run.sh mlog | tee polygon-heartbeat.out | grep -q "POLYGON heartbeat 3/3"
       - name: Mini App — сессии и каркас (АСС-2.2 A.3) — 7/7

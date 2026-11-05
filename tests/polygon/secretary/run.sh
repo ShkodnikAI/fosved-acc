@@ -14,9 +14,12 @@
 #  3. /status при открытом инциденте — «КРАСНЫЙ»;
 #  4. событие incident_open уходит один раз, повторный цикл не дублирует;
 #  5. сводка в тот же день второй раз не уходит.
+#  6. (наряд #50, A.3): сбой обработки (файл сайта без таблиц + маркер,
+#     состояние прода 05.11) → 200 без цикла повторов, владельцу —
+#     «Ошибка обработки команды: SQL_ERROR».
 #
 # Запуск из корня репо: bash tests/polygon/secretary/run.sh [путь к mlog]
-# Ожидаемо: POLYGON secretary 5/5
+# Ожидаемо: POLYGON secretary 6/6
 set -uo pipefail
 
 ML="${1:-mlog}"
@@ -47,6 +50,9 @@ if [ $? != 0 ]; then
 fi
 
 # 2) serve-процесс полигона (только localhost)
+# A.3 (#50): сценарий 6 перезаписывает site.db (файл сайта — sensitive-path
+# №455/#475); явный allowlist ТОЛЬКО теста, в проде не задаётся.
+METALOGOS_SENSITIVE_PATH_ALLOWLIST="data/sites/tega/site.db" \
 METALOGOS_ENV_ALLOWLIST="ACC_TELEGRAM_WEBHOOK_SECRET,ACC_OWNER_TG_ID,ACC_INTERNAL_TOKEN" \
 ACC_TELEGRAM_WEBHOOK_SECRET="poly-webhook-secret-0123456789abcdef" \
 ACC_OWNER_TG_ID="111222333" \
@@ -121,9 +127,22 @@ s2="$(curl -s "$BASE/test/summary")"
 mc5b="$(curl -s "$BASE/test/mock-count")"
 mark "$mc5b" "3" "5c: повторная сводка не уходит"
 
+# ── задача 6 (наряд #50, A.3): сбой обработки — 200 + класс ошибки владельцу ──
+# Состояние прода 05.11: файл сайта без таблиц, kv-маркер выставлен.
+dmg="$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/test/damage")"
+mark "$dmg" "200" "6a: повреждение применено"
+c6="$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/tg" -H "X-Telegram-Bot-Api-Secret-Token: poly-webhook-secret-0123456789abcdef" -d '{"message":{"text":"/status","from":{"id":111222333},"chat":{"id":111222333}}}')"
+mark "$c6" "200" "6b: сбой обработки → 200 (Telegram не зацикливает повторы)"
+err6="$(curl -s "$BASE/test/mock-contains?needle=SQL_ERROR")"
+mark "$err6" "yes" "6c: класс ошибки SQL_ERROR в сообщении владельцу"
+# NB: сам текст в моке хранится через redact(…, "all") (шов SecSend),
+# кириллический префикс маскируется — проверяем доставку (счётчик) и класс.
+mc6="$(curl -s "$BASE/test/mock-count")"
+mark "$mc6" "4" "6d: ровно одно сообщение об ошибке (4 после 3)"
+
 grep -v REDACT "$ERRLOG" >/dev/null 2>&1 || true
 if [ "$fail" = 0 ]; then
-  echo "POLYGON secretary 5/5"
+  echo "POLYGON secretary 6/6"
 else
   echo "POLYGON secretary FAIL (OK=$ok FAIL=$fail)"
   grep -v REDACT serve.log | grep -E "error|Error" | head -5 || true
