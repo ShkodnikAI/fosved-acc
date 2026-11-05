@@ -92,7 +92,7 @@ pattern Main1(_: String) -> String {
   let _ = st.SiteDb("aa")
   let _ = lg.Journal("aa", "isolation", "тест изоляции: запись в aa")
   let ce = query_scalar("SELECT COUNT(*) FROM site.events", [])
-  let ev = redact(to_string(to_float(to_string(ce)) >= 1.0), "hash_only")
+  let ev = redact(to_string(ce >= 1.0), "hash_only")
   if ev == REF_TRUE { ok = ok + 1.0 } else { fail = fail + 1.0 }
   // ── 10: подписанный журнал непуст ──
   let n = ledger_count()

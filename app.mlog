@@ -3,16 +3,6 @@
 // Ответ: {"status":"ok"|"degraded","checks":{...}}; при degraded — HTTP 503.
 // Каталог данных — METALOGOS_DATA_DIR (по умолчанию ./data, ТЗ §13).
 
-// АСС-1.10 (наряд #38, B.1): разрешение необратимых носителей (0.36+,
-// ADR-0203). Без декларации каждый sharp-вызов отказывает
-// IRREVERSIBLE_NO_GRANT ДО действия, включая тики нативного cron
-// (Metalogos-#1735, исправлено в 0.38.1). Имена — по фактическому
-// использованию: send_message (modules/secretary/bot.mlog), http_post
-// (core/http.mlog SafePost), exec_argv (modules/deadlines/run.mlog,
-// modules/intake/recon.mlog). Профиль не ослабляет классы GrantAlways
-// и не заменяет db_execute_with_grant.
-profile capability { allow_carrier: "send_message" allow_carrier: "http_post" allow_carrier: "exec_argv" }
-
 import modules/duty/schedule as duty
 import modules/deadlines/run as dl
 import modules/secretary/bot as bot
