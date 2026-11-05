@@ -13,6 +13,7 @@ import core/registry as reg
 import core/github_pr as ghpr
 import core/ledger as lg
 import core/store as st
+import modules/intake/form as intake_form
 
 db { url: "sqlite:data/acc.db" }
 
@@ -328,6 +329,156 @@ mlogserver {
     // SiteInit журнала: CREATE IF NOT EXISTS (Journal делает только ATTACH)
     let _ = st.SiteInit("journal")
     let _ = lg.Journal("journal", "registry_pr", kind + " " + op + " " + id + " " + pr)
+    return respond("200 " + redact(json_encode({pr_url: pr}), "all"))
+  }
+
+  // Наряд АСС-2.6 (A.1–A.4): вкладка «Приём» — опросник, переменные, пробный
+  // прогон, «Принять» → PR паспорта. Сессия — как у /api/registry. id —
+  // url черновика (percent-encoded в пути; server_path_param, Metalogos
+  // №283 — проба пина v0.33.2: decoding работает). Логика —
+  // modules/intake/form.mlog: прогон — только чтение (без SiteDb черновика,
+  // без записей в incidents/events), «Принять» — ValidatePassport →
+  // OpenPR (токен ACC_GITHUB_TOKEN внутри ghpr, наружу не выходит).
+  route "/api/intake/drafts" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    return respond("200 " + redact(intake_form.IntakeListJson(), "all"))
+  }
+
+  route "/api/intake/{id}" method=GET {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    // id — url черновика (декодирован сервером из шаблона роута; недоверен)
+    let draft_url = server_path_param("id")
+    let draft_text = intake_form.IntakeDraftRow(draft_url)
+    let no_draft = redact(to_string(draft_text == ""), "hash_only")
+    if no_draft == redact(to_string(true), "hash_only") {
+      return respond("404 {\"error\":\"черновик не найден\"}")
+    }
+    let acc = intake_form.IntakeAcceptStatusJson(draft_url)
+    return respond("200 " + redact("{\"draft\":" + draft_text + ",\"accept\":" + acc + "}", "all"))
+  }
+
+  route "/api/intake/{id}/validate" method=POST {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let b = json_body()
+    let b_none = redact(to_string(b), "hash_only")
+    if b_none == redact("()", "hash_only") {
+      return respond("400 {\"error\":\"нет тела запроса\"}")
+    }
+    // NB: пустой/битый паспорт не гвардим отдельным сравнением —
+    // сравнение private-значения через or отравляет поток для
+    // private-egress-анализатора (проба этой сессии); сам валидатор
+    // корректно отвечает «json: корень должен быть объектом»
+    let ptxt = json_encode(json_get(b, "passport", ""))
+    let verr = intake_form.IntakeValidate(ptxt)
+    let v_ok = redact(to_string(verr == "ok"), "hash_only")
+    if v_ok == redact(to_string(true), "hash_only") {
+      return respond("200 {\"ok\":true}")
+    }
+    // ошибка у поля: текст валидатора "<поле>: <что не так>" — поле до ": "
+    let idx = index_of(verr, ": ")
+    let has_idx = redact(to_string(to_float(to_string(idx)) >= 0.0), "hash_only")
+    let mut field = ""
+    if has_idx == redact(to_string(true), "hash_only") {
+      field = substring(verr, 0.0, to_float(to_string(idx)))
+    }
+    return respond("200 " + redact(json_encode({ok: false, field: field, error: verr}), "all"))
+  }
+
+  route "/api/intake/{id}/trialrun" method=POST {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let draft_url = server_path_param("id")
+    let draft_text = intake_form.IntakeDraftRow(draft_url)
+    let no_draft = redact(to_string(draft_text == ""), "hash_only")
+    if no_draft == redact(to_string(true), "hash_only") {
+      return respond("404 {\"error\":\"черновик не найден\"}")
+    }
+    // домен черновика — временное разрешение (как при разведке: 10 минут,
+    // журнал intake_allow); сам прогон — только чтение
+    let _ = intake_form.IntakeEnsureAllow(draft_url)
+    let trial = intake_form.IntakeTrialJson(draft_url)
+    return respond("200 " + redact(trial, "all"))
+  }
+
+  route "/api/intake/{id}/accept" method=POST {
+    let secret = try env_or("ACC_SESSION_SECRET", "")
+    let secret_s = to_string(secret)
+    let sec_empty = redact(to_string(secret_s == "()" or secret_s == ""), "hash_only")
+    if sec_empty == redact(to_string(true), "hash_only") {
+      return respond("503 {\"error\":\"app not configured\"}")
+    }
+    let tok = request_header("X-ACC-Session")
+    let ok = mini.SessionValid(tok)
+    let ok_ref = redact(to_string(ok == true), "hash_only")
+    if ok_ref != redact(to_string(true), "hash_only") {
+      return respond("401 {\"error\":\"unauthorized\"}")
+    }
+    let draft_url = server_path_param("id")
+    let draft_text = intake_form.IntakeDraftRow(draft_url)
+    let no_draft = redact(to_string(draft_text == ""), "hash_only")
+    if no_draft == redact(to_string(true), "hash_only") {
+      return respond("404 {\"error\":\"черновик не найден\"}")
+    }
+    let b = json_body()
+    let b_none = redact(to_string(b), "hash_only")
+    if b_none == redact("()", "hash_only") {
+      return respond("400 {\"error\":\"нет тела запроса\"}")
+    }
+    // NB: пустой/битый паспорт отсечёт валидатор внутри IntakeAccept
+    // (см. комментарий в /validate — сравнение через or отравляет поток)
+    let ptxt = json_encode(json_get(b, "passport", ""))
+    let wn_raw = to_string(json_get(b, "with_notes", false))
+    let with_notes = wn_raw == "true"
+    // домен черновика — временное разрешение (прогон внутри приёма)
+    let _ = intake_form.IntakeEnsureAllow(draft_url)
+    let pr = intake_form.IntakeAccept(draft_url, ptxt, with_notes)
+    let pr_err = redact(to_string(starts_with(pr, "error:")), "hash_only")
+    if pr_err == redact(to_string(true), "hash_only") {
+      return respond("400 " + redact(json_encode({error: pr}), "all"))
+    }
     return respond("200 " + redact(json_encode({pr_url: pr}), "all"))
   }
 

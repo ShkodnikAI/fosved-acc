@@ -1,0 +1,45 @@
+// Фикстуры наряда АСС-2.6 (tests/intakeapi/run.sh): два черновика разведки
+// (АСС-2.5) в intake_drafts + инициализированная БД сайта tfake для
+// счётчиков A.5.2. Идемпотентно (повторный запуск run.sh — UPDATE ветка,
+// как IntakeSaveDraft в recon.mlog).
+//
+// draft 1 — «зелёный» черновик: страницы фейк-сайта 18488 с верным
+//   expect_text, health_url найден разведкой;
+// draft 2 — «красный» черновик: expect_text, которого на странице нет
+//   (пробный прогон обязан дать no_text → не зелёный, тест A.5.3).
+
+import core/store as st
+
+db { url: "sqlite:data/acc.db" }
+
+pattern PutDraft(url: String, draft: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let gt = grant_issue("db:insert:intake_drafts.tables", 60, "unlimited")
+  let _ = db_execute_with_grant(gt, "CREATE TABLE IF NOT EXISTS intake_drafts (url TEXT PRIMARY KEY, draft TEXT, updated_ts REAL)", [])
+  let c = query_scalar("SELECT COUNT(*) FROM intake_drafts WHERE url = ?1", [url])
+  let exists = redact(to_string(to_float(to_string(c)) >= 1.0), "hash_only")
+  if exists == REF_TRUE {
+    let gu = grant_issue("db:update:intake_drafts", 60, "unlimited")
+    let _ = db_execute_with_grant(gu, "UPDATE intake_drafts SET draft = ?1, updated_ts = ?2 WHERE url = ?3", [draft, now(), url])
+    return "updated"
+  }
+  let gi = grant_issue("db:insert:intake_drafts", 60, "unlimited")
+  let _ = db_execute_with_grant(gi, "INSERT INTO intake_drafts (url, draft, updated_ts) VALUES (?1, ?2, ?3)", [url, draft, now()])
+  return "created"
+}
+
+pattern Main1(_: String) -> String {
+  let green_draft = "{\"slug\":null,\"name\":\"ТЭГА ПЛЮС — главная\",\"url\":\"http://127.0.0.1:18488\",\"languages\":[\"ru\",\"be\",\"en\"],\"timezone\":null,\"people\":null,\"repo\":{\"github\":null,\"branch\":null,\"deploy\":null,\"health_url\":\"http://127.0.0.1:18488/health\",\"key_envs\":null},\"checks\":{\"uptime_every_min\":null,\"daily_at\":null,\"pages\":[{\"path\":\"/\",\"expect_text\":\"Юридические услуги\"}]},\"modules\":null,\"limits\":null,\"domain\":{\"registrar\":null,\"registrar_panel_url\":null,\"expires\":null,\"expires_source\":\"auto\",\"cert_expires\":null,\"autorenew\":null,\"dns_provider\":null,\"warn_days\":null,\"renewal_owner\":null},\"profile\":null,\"participation\":null,\"platform\":{\"adapter\":null,\"cdn\":null},\"models\":null,\"sources\":null,\"found_auto\":[\"name\",\"languages\",\"checks.pages\",\"repo.health_url\"]}"
+  let red_draft = "{\"slug\":null,\"name\":\"Минимальный сайт\",\"url\":\"http://127.0.0.1:18489\",\"languages\":null,\"timezone\":null,\"people\":null,\"repo\":{\"github\":null,\"branch\":null,\"deploy\":null,\"health_url\":null,\"key_envs\":null},\"checks\":{\"uptime_every_min\":null,\"daily_at\":null,\"pages\":[{\"path\":\"/\",\"expect_text\":\"НЕТУ-ТАКОГО-ТЕКСТА\"}]},\"modules\":null,\"limits\":null,\"domain\":{\"registrar\":null,\"registrar_panel_url\":null,\"expires\":null,\"expires_source\":\"auto\",\"cert_expires\":null,\"autorenew\":null,\"dns_provider\":null,\"warn_days\":null,\"renewal_owner\":null},\"profile\":null,\"participation\":null,\"platform\":{\"adapter\":null,\"cdn\":null},\"models\":null,\"sources\":null,\"found_auto\":[\"name\",\"checks.pages\"]}"
+  let r1 = PutDraft("http://127.0.0.1:18488", green_draft)
+  let r2 = PutDraft("http://127.0.0.1:18489", red_draft)
+  // инициализированная БД сайта tfake: счётчики incidents/events до и
+  // после прогона должны совпасть (A.5.2)
+  let _ = st.SiteInit("tfake")
+  print("FIXTURE " + r1 + " " + r2)
+  return "fixture ok"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

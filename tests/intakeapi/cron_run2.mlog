@@ -1,0 +1,43 @@
+// Тест A.5.5, прогон 2 (наряд АСС-2.6): РЕСТАРТ приложения после «мержа»
+// паспорта сайта two (фикстуру кладёт run.sh между прогонами — деплой
+// зеркала data/sites/two/passport.json). Код НЕ менялся — те же функции
+// регистрации расписаний (#39), что и в прогоне 1. Ожидаемо:
+//   - duty-tick ПОЯВИЛСЯ в cron_list (задание Дежурного для нового slug —
+//     у two модуль duty, у one его нет);
+//   - deadlines-tick-08:30-Europe/Minsk появился (пара daily_at/tz нового
+//     паспорта), 07:00 сохранился;
+//   - немедленный тик Дежурного прошёл по новому slug (строка "two: duty:").
+// Ожидаемо: CRON2 dl07=1 dl0830=1 duty=1 и строка CRON2REP с "two: duty:"
+
+import modules/duty/schedule as ds
+import modules/deadlines/run as dl
+
+db { url: "sqlite:data/acc.db" }
+
+pattern HasPrompt(p: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut found = "0"
+  each j in cron_list() {
+    let hit = redact(to_string(to_string(j.prompt) == p), "hash_only")
+    if hit == REF_TRUE {
+      found = "1"
+    }
+  }
+  return found
+}
+
+pattern Main1(_: String) -> String {
+  // рестарт: та же регистрация расписаний (start.sh), код не менялся
+  let rep = ds.DutyBootstrap()
+  let _ = dl.DlBootstrap()
+  let dl07 = HasPrompt("deadlines-tick-07:00-Europe/Minsk")
+  let dl0830 = HasPrompt("deadlines-tick-08:30-Europe/Minsk")
+  let duty = HasPrompt("duty-tick")
+  print("CRON2 dl07=" + dl07 + " dl0830=" + dl0830 + " duty=" + duty)
+  print("CRON2REP " + redact(rep, "all"))
+  return "cron2 done"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

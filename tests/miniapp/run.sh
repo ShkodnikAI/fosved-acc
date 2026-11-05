@@ -91,10 +91,13 @@ echo "$h_css" | grep -qi "text/css" && ok=$((ok+1)) || { fail=$((fail+1)); echo 
 echo "$h_css" | grep -qi "^Cache-Control: no-store" && ok=$((ok+1)) || { fail=$((fail+1)); echo "FAIL: /app.css Cache-Control"; }
 # тело /app — HTML каркаса дошёл без искажений
 body_app="$(curl -s "http://127.0.0.1:$PORT/app")"
-echo "$body_app" | grep -q 'id="tabs"' && ok=$((ok+1)) || { fail=$((fail+1)); echo "FAIL: /app тело каркаса"; }
+# NB (АСС-2.6): here-string вместо `echo | grep -q` — под set -o pipefail
+# grep -q закрывает stdin после совпадения, echo получает SIGPIPE (rc 141)
+# и проверка ложно краснеет на большом теле (проба наряда: app.js > 30 КБ)
+grep -q 'id="tabs"' <<<"$body_app" && ok=$((ok+1)) || { fail=$((fail+1)); echo "FAIL: /app тело каркаса"; }
 # JS дошёл без маскирования (токен-подобных констант в JS нет — bridge не должен резать)
 body_js="$(curl -s "http://127.0.0.1:$PORT/app.js")"
-echo "$body_js" | grep -q "X-ACC-Session" && ok=$((ok+1)) || { fail=$((fail+1)); echo "FAIL: /app.js тело"; }
+grep -q "X-ACC-Session" <<<"$body_js" && ok=$((ok+1)) || { fail=$((fail+1)); echo "FAIL: /app.js тело"; }
 
 # 5: пустой ACC_SESSION_SECRET → 503 (второй сервер без секрета)
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null || true

@@ -1,0 +1,378 @@
+// Приём сайта — опросник, пробный прогон, «Принять» (наряд АСС-2.6, A.1–A.4;
+// ТЗ §5 шаги 3–6). Дополнение к modules/intake/recon.mlog (АСС-2.5): черновик
+// уже лежит в intake_drafts (data/acc.db), здесь — дозаполнение и приём.
+//
+// IntakeEnsureAllow(url) — временное разрешение домена черновика тем же
+//   механизмом, что разведка (recon.IntakeAllowDomain: kv acc_http_tmp:<host>,
+//   10 минут, журнал intake_allow); повторный вызов по свежему разрешению —
+//   без новой строки журнала.
+// IntakeTrialJson(url) — ПРОБНЫЙ ПРОГОН (A.3): один цикл DutyCheck по
+//   страницам ЧЕРНОВИКА (duty.DutyCheckPage/DutyHealthCheck — только GET
+//   через SafeGet) + проверка сроков свежим прогоном скриптов checks/
+//   (exec остаётся в recon.mlog — гард scripts/check_exec.sh не расширяется).
+//   НИ ОДНОЙ ЗАПИСИ: ни SiteDb черновика (черновик ещё не сайт — файла
+//   data/sites/<slug>/ нет, актуализация аудитора 05.11), ни kv, ни журнала;
+//   результат — только в ответе. Зелёный прогон: все страницы ok, health ok
+//   (если задан), ни один найденный срок не истёк (days_left > 0). Срок
+//   неизвестен — не мешает зелёному (пометка в notes; на вкладке «Сайты»
+//   неизвестный срок и так жёлтый).
+// IntakeValidate(text) — полный валидатор паспорта (не draft) — core/passport.
+// IntakeAccept(url, passport_text, with_notes) — «Принять на обслуживание»
+//   (A.4): пробный прогон (свежий, серверный) → не зелёный и без отметки —
+//   отказ; ValidatePassport → ghpr.OpenPR("sites/<slug>/passport.json", …)
+//   из АСС-2.4 (тело PR: результат прогона и found_auto черновика); черновик
+//   → статус pr_open в intake_accepts + журнал. Токен GitHub — ACC_GITHUB_TOKEN
+//   внутри OpenPR, наружу не выходит.
+//
+// Безопасность: url/id черновика — из сети (server_path_param, недоверен);
+// решения — только через inline-барьер redact(…, "hash_only") (рецепт #546).
+// SQL — литеральный, значения — только через ?; таблицы черновиков — в общей
+// базе АСС (data/acc.db, main), БЕЗ алиаса site (данные сайта — только через
+// SiteDb, гард #44; черновики — не данные сайта, прецедент recon.mlog).
+
+import modules/duty/check as duty
+import modules/intake/recon as recon
+import core/github_pr as ghpr
+import core/passport as pp
+import core/ledger as lg
+import core/allowlist as aw
+
+
+pattern IntakeEnsureAllow(url: String) -> String {
+  // свежее разрешение уже стоит (разведка/прошлый прогон) — не дублируем журнал
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let host = aw.HostOf(url)
+  let cur = try to_float(to_string(kv_get("acc_http_tmp:" + host)))
+  let cur_err = redact(to_string(cur), "hash_only")
+  if cur_err != redact("()", "hash_only") {
+    let fresh = redact(to_string(to_float(to_string(cur)) > now_unix()), "hash_only")
+    if fresh == REF_TRUE {
+      return "kept"
+    }
+  }
+  return recon.IntakeAllowDomain(url)
+}
+
+pattern IntakeDraftRow(url: String) -> String {
+  // текст черновика по url ("") — нет записи
+  let r = query_row("SELECT draft FROM intake_drafts WHERE url = ?1", [url])
+  let n = len(r)
+  if redact(to_string(to_float(to_string(n)) < 1.0), "hash_only") == redact(to_string(true), "hash_only") {
+    return ""
+  }
+  return to_string(get(r, 0.0))
+}
+
+pattern IntakeAcceptStatusJson(url: String) -> String {
+  // {"status":…,"pr_url":…} или null
+  let r = query_row("SELECT status, pr_url FROM intake_accepts WHERE url = ?1", [url])
+  let n = len(r)
+  if redact(to_string(to_float(to_string(n)) < 1.0), "hash_only") == redact(to_string(true), "hash_only") {
+    return "null"
+  }
+  let st = to_string(get(r, 0.0))
+  let pr = to_string(get(r, 1.0))
+  return "{\"status\":\"" + redact(st, "all") + "\",\"pr_url\":\"" + redact(pr, "all") + "\"}"
+}
+
+pattern IntakeAcceptPut(url: String, status: String, pr_url: String, with_notes: Bool) -> String {
+  // статус черновика после «Принять»: pr_open + ссылка (A.4); повторный
+  // приём того же черновика (PR переоткрыт) — обновляет строку
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let gc = grant_issue("db:insert:intake_accepts.tables", 60, "unlimited")
+  let _ = db_execute_with_grant(gc, "CREATE TABLE IF NOT EXISTS intake_accepts (url TEXT PRIMARY KEY, status TEXT, pr_url TEXT, with_notes INTEGER, updated_ts REAL)", [])
+  let c = query_scalar("SELECT COUNT(*) FROM intake_accepts WHERE url = ?1", [url])
+  let exists = redact(to_string(to_float(to_string(c)) >= 1.0), "hash_only")
+  let mut wn = 0.0
+  if redact(to_string(with_notes == true), "hash_only") == REF_TRUE {
+    wn = 1.0
+  }
+  if exists == REF_TRUE {
+    let gu = grant_issue("db:update:intake_accepts", 60, "unlimited")
+    let _ = db_execute_with_grant(gu, "UPDATE intake_accepts SET status = ?1, pr_url = ?2, with_notes = ?3, updated_ts = ?4 WHERE url = ?5", [status, pr_url, wn, now(), url])
+    return "updated"
+  }
+  let gi = grant_issue("db:insert:intake_accepts", 60, "unlimited")
+  let _ = db_execute_with_grant(gi, "INSERT INTO intake_accepts (url, status, pr_url, with_notes, updated_ts) VALUES (?1, ?2, ?3, ?4, ?5)", [url, status, pr_url, wn, now()])
+  return "created"
+}
+
+pattern IntakeListJson() -> String {
+  // список черновиков для вкладки «Приём» (A.1): url, время обновления,
+  // статус приёма (если был)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let gc = grant_issue("db:insert:intake_accepts.tables", 60, "unlimited")
+  let _ = db_execute_with_grant(gc, "CREATE TABLE IF NOT EXISTS intake_accepts (url TEXT PRIMARY KEY, status TEXT, pr_url TEXT, with_notes INTEGER, updated_ts REAL)", [])
+  let mut acc = ""
+  each row in query("SELECT d.url, d.updated_ts, a.status, a.pr_url FROM intake_drafts d LEFT JOIN intake_accepts a ON d.url = a.url ORDER BY d.updated_ts DESC", []) {
+    let u = to_string(row.url)
+    let ts = to_string(row.updated_ts)
+    let st = to_string(row.status)
+    let pr = to_string(row.pr_url)
+    let mut st_json = "null"
+    let has_st = redact(to_string(st != "()" and st != ""), "hash_only")
+    if has_st == REF_TRUE {
+      st_json = "{\"status\":\"" + redact(st, "all") + "\",\"pr_url\":\"" + redact(pr, "all") + "\"}"
+    }
+    acc = acc + "{\"url\":\"" + redact(u, "all") + "\",\"updated_ts\":" + ts + ",\"accept\":" + st_json + "},"
+  }
+  let empty = redact(to_string(acc == ""), "hash_only")
+  if empty == REF_TRUE {
+    return "[]"
+  }
+  let m = len(acc)
+  return "[" + substring(acc, 0.0, m - 1.0) + "]"
+}
+
+pattern IntakeMsVerdict(base: String, path: String, expect_text: String) -> String {
+  // страница прогона: вердикт + замер времени снаружи (DutyCheckPage —
+  // только чтение, один GET через SafeGet)
+  let t0 = now()
+  let v = duty.DutyCheckPage(base, path, expect_text)
+  let ms = (now() - t0) * 1000.0
+  return to_string(v) + "\u0001" + to_string(ms)
+}
+
+pattern IntakeNormExp(raw: String) -> String {
+  // срок из скрипта checks/ или черновика: "" | "()" | "null" → ""; иначе как есть
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let is_empty = redact(to_string(raw == "" or raw == "()" or raw == "null"), "hash_only")
+  if is_empty == REF_TRUE {
+    return ""
+  }
+  return raw
+}
+
+pattern IntakeDaysLeft(expires: String) -> String {
+  // дней до срока (julianday, как core/status.mlog); "" | не дата → ""
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let is_empty = redact(to_string(expires == ""), "hash_only")
+  if is_empty == REF_TRUE {
+    return ""
+  }
+  let d = try to_float(to_string(query_scalar("SELECT CAST(julianday(date(?1)) - julianday(date('now')) AS INTEGER)", [expires])))
+  let d_err = redact(to_string(d), "hash_only")
+  if d_err == redact("()", "hash_only") {
+    return ""
+  }
+  return to_string(to_float(to_string(d)))
+}
+
+pattern IntakeDeadlineJson(kind: String, host: String, draft_expires: String) -> String {
+  // свежая проверка срока (exec в recon.mlog — единственный канал, гард
+  // check_exec.sh); нет свежей — срок черновика (разведка); нет и его — null
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let fresh = IntakeNormExp(recon.IntakeDeadline(kind, host))
+  let has_fresh = redact(to_string(fresh != ""), "hash_only")
+  if has_fresh != REF_TRUE {
+    // нет свежего — срок разведки (без нового exec)
+    let draft_exp = IntakeNormExp(draft_expires)
+    return "{\"expires\":" + IntakeExpJson(draft_exp) + ",\"days\":" + IntakeDaysJson(draft_exp) + ",\"source\":\"draft\"}"
+  }
+  return "{\"expires\":" + IntakeExpJson(fresh) + ",\"days\":" + IntakeDaysJson(fresh) + ",\"source\":\"fresh\"}"
+}
+
+pattern IntakeExpJson(exp: String) -> String {
+  let is_empty = redact(to_string(exp == ""), "hash_only")
+  if is_empty == redact(to_string(true), "hash_only") {
+    return "null"
+  }
+  return "\"" + redact(exp, "all") + "\""
+}
+
+pattern IntakeDaysJson(exp: String) -> String {
+  let d = IntakeDaysLeft(exp)
+  let is_empty = redact(to_string(d == ""), "hash_only")
+  if is_empty == redact(to_string(true), "hash_only") {
+    return "null"
+  }
+  return d
+}
+
+pattern IntakeTrialJson(url: String) -> String {
+  // пробный прогон (A.3) — ТОЛЬКО чтение: ни записей в БД, ни kv, ни журнала
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let draft_text = IntakeDraftRow(url)
+  let no_draft = redact(to_string(draft_text == ""), "hash_only")
+  if no_draft == REF_TRUE {
+    return "{\"ok\":false,\"error\":\"черновик не найден\"}"
+  }
+  let r = try parse_json(draft_text)
+  let r_ok = redact(to_string(r.ok), "hash_only")
+  if r_ok != REF_TRUE {
+    return "{\"ok\":false,\"error\":\"черновик не разбирается\"}"
+  }
+  // allow(unchecked_result): ранний return выше при r.ok != true — гвард через redact-барьер (№802)
+  let j = r.value
+  let base = to_string(j.url)
+  let pages = j.checks.pages
+  // 1) страницы черновика: вердикт, время, найден ли текст (A.3)
+  let mut pages_acc = ""
+  let mut all_ok = true
+  each p in pages {
+    let pv = IntakeMsVerdict(base, to_string(p.path), to_string(p.expect_text))
+    let pv_parts = split(pv, "\u0001")
+    let verdict = to_string(get(pv_parts, 0.0))
+    // ms — целым: дробь с длинным цифровым хвостом redact(…,"all") маскирует
+    // как похожую на номер карты (проба этой сессии)
+    let ms_raw = to_float(to_string(get(pv_parts, 1.0)))
+    let ms = to_string(to_int(ms_raw))
+    let is_ok = redact(to_string(verdict == "ok"), "hash_only")
+    if is_ok != REF_TRUE {
+      all_ok = false
+    }
+    let mut ok_json = "false"
+    if is_ok == REF_TRUE {
+      ok_json = "true"
+    }
+    pages_acc = pages_acc + "{\"path\":\"" + redact(to_string(p.path), "all") + "\",\"verdict\":\"" + redact(verdict, "all") + "\",\"ms\":" + ms + ",\"text_ok\":" + ok_json + "},"
+  }
+  let mut pages_json = "[" + substring(pages_acc, 0.0, to_float(to_string(len(pages_acc))) - 1.0) + "]"
+  let has_pages = redact(to_string(pages_acc != ""), "hash_only")
+  if has_pages != REF_TRUE {
+    pages_json = "[]"
+    all_ok = false
+  }
+  // 2) health_url черновика (если найден разведкой)
+  let mut health_json = "null"
+  let hu = IntakeNormExp(to_string(j.repo.health_url))
+  let has_hu = redact(to_string(hu != ""), "hash_only")
+  if has_hu == REF_TRUE {
+    let t0h = now()
+    let hv = duty.DutyHealthCheck(hu)
+    let msh = (now() - t0h) * 1000.0
+    let h_ok = redact(to_string(to_string(hv) == "ok"), "hash_only")
+    if h_ok != REF_TRUE {
+      all_ok = false
+    }
+    let mut h_ok_json = "false"
+    if h_ok == REF_TRUE {
+      h_ok_json = "true"
+    }
+    health_json = "{\"verdict\":\"" + redact(to_string(hv), "all") + "\",\"ms\":" + to_string(to_int(msh)) + ",\"text_ok\":" + h_ok_json + "}"
+  }
+  // 3) сроки (A.3 «проверка сроков»): свежий прогон скриптов checks/ (exec
+  //    в recon.mlog), фолбэк — срок разведки; истёкший срок красит прогон
+  let host = aw.HostOf(base)
+  let dom_raw = IntakeNormExp(to_string(j.domain.expires))
+  let cert_raw = IntakeNormExp(to_string(j.domain.cert_expires))
+  let dom_j = IntakeDeadlineJson("domain", host, dom_raw)
+  let cert_j = IntakeDeadlineJson("cert", host, cert_raw)
+  // notes: срок истёк (красит), срок неизвестен (не красит)
+  let mut notes = ""
+  let dom_days = IntakeDaysLeft(IntakeNormExp(dom_raw))
+  let dom_days_fresh = try to_float(dom_days)
+  let dd_err = redact(to_string(dom_days_fresh), "hash_only")
+  if dd_err != redact("()", "hash_only") {
+    let dom_expired = redact(to_string(to_float(to_string(dom_days_fresh)) <= 0.0), "hash_only")
+    if dom_expired == REF_TRUE {
+      all_ok = false
+      notes = notes + "срок domain истёк (по черновику),"
+    }
+  }
+  let cert_days = IntakeDaysLeft(IntakeNormExp(cert_raw))
+  let cert_days_f = try to_float(cert_days)
+  let cd_err = redact(to_string(cert_days_f), "hash_only")
+  if cd_err != redact("()", "hash_only") {
+    let cert_expired = redact(to_string(to_float(to_string(cert_days)) <= 0.0), "hash_only")
+    if cert_expired == REF_TRUE {
+      all_ok = false
+      notes = notes + "срок cert истёк (по черновику),"
+    }
+  }
+  let mut green_str = "false"
+  if redact(to_string(all_ok == true), "hash_only") == REF_TRUE {
+    green_str = "true"
+  }
+  let mut notes_json = "[]"
+  let has_notes = redact(to_string(notes != ""), "hash_only")
+  if has_notes == REF_TRUE {
+    let nm = len(notes)
+    notes_json = "[" + substring(notes, 0.0, nm - 1.0) + "]"
+  }
+  return "{\"ok\":true,\"green\":" + green_str + ",\"url\":\"" + redact(base, "all") + "\",\"pages\":" + pages_json + ",\"health\":" + health_json + ",\"deadlines\":{\"domain\":" + dom_j + ",\"cert\":" + cert_j + "},\"notes\":" + notes_json + "}"
+}
+
+pattern IntakeTrialGreen(trial_json: String) -> Bool {
+  // green из текста результата прогона (строка недоверенна — барьер)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  return redact(to_string(contains(trial_json, "\"green\":true")), "hash_only") == REF_TRUE
+}
+
+pattern IntakeFoundAutoJson(draft_text: String) -> String {
+  // found_auto черновика для тела PR (A.4); пусто → []
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let r = try parse_json(draft_text)
+  let r_ok = redact(to_string(r.ok), "hash_only")
+  if r_ok != REF_TRUE {
+    return "[]"
+  }
+  // allow(unchecked_result): ранний return выше при r.ok != true — гвард через redact-барьер (№802)
+  let j = r.value
+  let fa = j.found_auto
+  let is_list = redact(to_string(type_of(fa) == "List"), "hash_only")
+  if is_list != REF_TRUE {
+    return "[]"
+  }
+  return json_encode(fa)
+}
+
+pattern IntakeValidate(passport_text: String) -> String {
+  // полный валидатор (не draft) — строка "ok" | "<поле>: <что не так>"
+  return pp.ValidatePassport(passport_text)
+}
+
+pattern IntakeAccept(url: String, passport_text: String, with_notes: Bool) -> String {
+  // «Принять на обслуживание» (A.4)
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  // 0) черновик существует?
+  let draft_text = IntakeDraftRow(url)
+  let no_draft = redact(to_string(draft_text == ""), "hash_only")
+  if no_draft == REF_TRUE {
+    return "error: черновик не найден"
+  }
+  // 1) свежий серверный пробный прогон (не доверяем клиенту)
+  let trial = IntakeTrialJson(url)
+  let trial_bad = redact(to_string(contains(trial, "\"ok\":false")), "hash_only")
+  if trial_bad == REF_TRUE {
+    return "error: пробный прогон не выполнен"
+  }
+  let green = IntakeTrialGreen(trial)
+  let need_notes = redact(to_string(green == false and with_notes == false), "hash_only")
+  if need_notes == REF_TRUE {
+    return "error: пробный прогон красный — отметьте «принять с замечаниями»"
+  }
+  // 2) полный валидатор паспорта (не draft)
+  let verr = pp.ValidatePassport(passport_text)
+  let v_ok = redact(to_string(verr == "ok"), "hash_only")
+  if v_ok != REF_TRUE {
+    return "error: validate: " + verr
+  }
+  // 3) slug из паспорта (валидатор уже проверил форму)
+  let pj = try parse_json(passport_text)
+  let pj_ok = redact(to_string(pj.ok), "hash_only")
+  if pj_ok != REF_TRUE {
+    return "error: validate: паспорт не разбирается"
+  }
+  // allow(unchecked_result): ранний return выше при pj.ok != true — гвард через redact-барьер (№802)
+  let p = pj.value
+  let slug = to_string(p.slug)
+  // 4) тело PR: результат прогона + found_auto черновика (A.4)
+  let fa_json = IntakeFoundAutoJson(draft_text)
+  let mut body = "Приём сайта " + redact(slug, "all") + " через опросник Mini App (АСС-2.6).\n\nЧерновик: " + redact(url, "all") + "\nПробный прогон (серверный, по страницам черновика): green=" + to_string(green)
+  let is_notes = redact(to_string(with_notes == true), "hash_only")
+  if is_notes == REF_TRUE {
+    body = body + "\nПометка владельца: принят с замечаниями"
+  }
+  body = body + "\nНайдено автоматически (found_auto): " + redact(fa_json, "all") + "\n\nРезультат прогона: " + redact(trial, "all")
+  let title = "passport: sites/" + slug + "/passport.json — приём через Mini App (АСС-2.6)"
+  let pr = ghpr.OpenPR("sites/" + slug + "/passport.json", passport_text, title, body)
+  let pr_err = redact(to_string(starts_with(pr, "error:")), "hash_only")
+  if pr_err == REF_TRUE {
+    return pr
+  }
+  // 5) статус черновика + журнал
+  let _ = IntakeAcceptPut(url, "pr_open", pr, with_notes)
+  let _ = lg.Journal("journal", "intake_accept", slug + " " + pr)
+  return pr
+}

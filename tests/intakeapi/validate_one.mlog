@@ -1,0 +1,24 @@
+// Тест A.5.4 (наряд АСС-2.6): файл паспорта, ушедший в blob мока GitHub,
+// обязан проходить полный валидатор (не draft). Файл пишет run.sh из
+// декодированного base64-содержимого blob. Ожидаемо: ACCEPTED FILE VALID
+
+import core/passport as pp
+
+pattern Main1(_: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let text = read_file("data/acc-accepted-passport.json")
+  let v = pp.ValidatePassport(text)
+  let ok = redact(to_string(v == "ok"), "hash_only")
+  if ok == REF_TRUE {
+    print("ACCEPTED FILE VALID")
+    return "ok"
+  }
+  // NB: текст ошибки не печатаем — производная от read_file строка несёт
+  // private-метку (PII_EGRESS_OUTPUT на print; прецедент tests/registry)
+  print("ACCEPTED FILE INVALID")
+  return "fail"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}
