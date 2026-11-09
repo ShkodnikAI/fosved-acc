@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 env:
-  MLOG_VERSION: v0.38.3
-  MLOG_SHA256: 4e07d11dd1881f903f519ced3abe7a6f48fb92c67a42ff0f81ce1e72057741b5
+  MLOG_VERSION: v0.39.0
+  MLOG_SHA256: 8f9b0e20380abe6eb8e6a608720fff81f099f0617a823b835d68bddcc95bd1f2
 
 jobs:
   layout:
