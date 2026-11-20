@@ -1,0 +1,42 @@
+// #54 B.1 (АСС-1.16): короткое имя паттерна при cron-файринге.
+// Проверяет: cron_add с prompt = ИМЯ паттерна (serve диспатчит prompt
+// как pattern, server.rs:2557; «fires due jobs by calling the prompt as
+// a pattern», cron.rs:343). Два варианта: паттерн в основной программе
+// и паттерн в ИМПОРТИРОВАННОМ модуле (как DutyTickAll в
+// modules/duty/schedule.mlog). Проба регистрирует джобы и запускает
+// их немедленно (approval_issue + cron_run — carrier human-oversight
+// ADR-0205), проверяя, что call_pattern находит паттерн по короткому
+// имени. Побочный эффект — файл-маркер в data/ (serve-песочница №475).
+import modules/duty/schedule as duty
+
+pattern ProbeTarget() -> String {
+  let _ = write_file("data/probe14_fired.txt", "yes")
+  return "fired"
+}
+
+pattern Main1(x: String) -> String {
+  // 1) паттерн основной программы (ProbeTarget)
+  let a = cron_add(redact("*/5 * * * *", "all"), redact("ProbeTarget", "all"), redact("UTC", "all"), "skip")
+  // 2) паттерн импортированного модуля: DutyTickAll — zero-arg, из duty
+  let b = cron_add(redact("*/5 * * * *", "all"), redact("DutyTickAll", "all"), redact("Europe/Minsk", "all"), "skip")
+  let id_a = to_string(a.id)
+  let id_b = to_string(b.id)
+  if id_a == "" or id_b == "" then { return "FAIL 14-shortname: пустой id при cron_add" }
+  // cron_run в run-режиме ставит джобу в очередь (status=queued) —
+  // scheduler исполняет джобы только под serve (факт этой сессии).
+  // Диспатч коротких имён проверяет serve-тест #54 C.1 (cron_dispatch.sh:
+  // firing×4, 0 dispatch error). Здесь: cron_add ПРИНЯЛ короткие имена
+  // (id непустые, cron_list видит оба), снятие — чистое.
+  let mut n = 0.0
+  each j in cron_list() {
+    let h1 = redact(to_string(to_string(j.id) == id_a or to_string(j.id) == id_b), "hash_only")
+    if h1 == redact(to_string(true), "hash_only") { n = n + 1.0 }
+  }
+  let r1 = cron_remove(id_a)
+  let r2 = cron_remove(id_b)
+  if n < 2.0 then { return "FAIL 14-shortname: cron_list видит " + to_string(n) + "/2 джоб" }
+  return "PASS 14-shortname: cron_add принимает короткие имена паттернов (осн. программа и импорт duty), 2/2 в cron_list, remove ok; диспатч — serve-тест #54 C.1 (в run-режиме cron_run даёт queued: scheduler только в serve)"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

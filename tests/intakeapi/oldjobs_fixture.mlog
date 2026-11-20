@@ -1,0 +1,19 @@
+// посадка старых джоб (как до #54): имена-НЕ-паттерны.
+// memory { persist } — тот же файл, что у app.mlog: cron_jobs живёт в
+// kv_store data/memory.db; без блока kv ин-мемори в этом процессе и
+// джобы не долетают до следующего прогона (проба этой сессии).
+memory { persist: "data/memory.db" }
+db { url: "sqlite:data/acc.db" }
+pattern Main1(_: String) -> String {
+  // литералы мостятся redact(…, "all") — идиома SecBootstrap
+  // (deliver.mlog): private-лейбл контекста, PII_EGRESS_NETWORK
+  let _ = cron_add(redact("*/5 * * * *", "all"), redact("duty-tick", "all"), redact("Europe/Minsk", "all"), "skip")
+  let _ = cron_add(redact("*/1 * * * *", "all"), redact("secretary-deliver", "all"), redact("UTC", "all"), "skip")
+  let _ = cron_add(redact("0 7 * * *", "all"), redact("secretary-summary-07:00-Europe/Minsk", "all"), redact("Europe/Minsk", "all"), "skip")
+  let _ = cron_add(redact("0 7 * * *", "all"), redact("deadlines-tick-07:00-Europe/Minsk", "all"), redact("Europe/Minsk", "all"), "skip")
+  let _ = cron_add(redact("30 8 * * *", "all"), redact("deadlines-tick-08:30-Europe/Minsk", "all"), redact("Europe/Minsk", "all"), "skip")
+  return "old jobs planted"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}
