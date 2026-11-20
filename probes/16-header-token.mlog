@@ -1,0 +1,27 @@
+// #54 A.1-бис — токен внутреннего API заголовком, не в URL.
+// Факт аудита 20.11: scripts/start.sh:51-53 вставлял ACC_INTERNAL_TOKEN
+// в query без кодирования (символы +/=&%# искажаются разбором query:
+// «+»→пробел и т.д.) → 401 на всех трёх bootstrap при верном токене.
+// Проба поднимает serve-маршрут /echo, который сравнивает значение
+// request_header("X-Internal-Token") с env-эталоном по рецепту #546
+// (обе стороны redact(…, "hash_only") — в ответ уходит только вердикт).
+// run.sh (блок 16) гоняет три ветки: верный токен со ВСЕМИ символами
+// +/=&%# (ожидание match), неверный (mismatch), пустой env (none).
+// Прежняя схема (?token=…) с тем же спецсимвольным токеном обязана
+// давать mismatch — сравнение обеих схем и есть факт пробы.
+mlogserver {
+  port: 18112
+  host: "127.0.0.1"
+  route "/echo" method=GET {
+    let expected = try env("ACC_PROBE_TOKEN")
+    let e_str = to_string(expected)
+    let expected_s = redact(e_str, "hash_only")
+    let got = request_header("X-Internal-Token")
+    let got_s = redact(to_string(got), "hash_only")
+    let verdict = redact(to_string(got_s == expected_s), "hash_only")
+    if verdict == redact(to_string(true), "hash_only") then {
+      return respond("200 match")
+    }
+    return respond("200 mismatch")
+  }
+}

@@ -93,7 +93,7 @@ mlogserver {
   }
   route "/internal/duty/bootstrap" method=GET {
     let expected = env_or("ACC_INTERNAL_TOKEN", "")
-    let got = query_param("token")
+    let got = request_header("X-Internal-Token")
     let ok = redact(to_string(redact(got, "hash_only") == redact(to_string(expected), "hash_only")), "hash_only")
     if ok != redact(to_string(true), "hash_only") { return respond("401 " + json_encode({error: "unauthorized"})) }
     let report = duty.DutyBootstrap()
@@ -101,7 +101,7 @@ mlogserver {
   }
   route "/internal/deadlines/bootstrap" method=GET {
     let expected = env_or("ACC_INTERNAL_TOKEN", "")
-    let got = query_param("token")
+    let got = request_header("X-Internal-Token")
     let ok = redact(to_string(redact(got, "hash_only") == redact(to_string(expected), "hash_only")), "hash_only")
     if ok != redact(to_string(true), "hash_only") { return respond("401 " + json_encode({error: "unauthorized"})) }
     let report = dl.DlBootstrap()
@@ -109,7 +109,7 @@ mlogserver {
   }
   route "/internal/secretary/bootstrap" method=GET {
     let expected = env_or("ACC_INTERNAL_TOKEN", "")
-    let got = query_param("token")
+    let got = request_header("X-Internal-Token")
     let ok = redact(to_string(redact(got, "hash_only") == redact(to_string(expected), "hash_only")), "hash_only")
     if ok != redact(to_string(true), "hash_only") { return respond("401 " + json_encode({error: "unauthorized"})) }
     let report = sec.SecBootstrap()
@@ -133,10 +133,17 @@ mlogserver {
     return respond("200 old planted")
   }
   // поминутные джобы сводки/дедлайнов (штатные — суточные на 07:00;
-  // тесту нужно срабатывание за ≤3 мин) — тем же API, теми же паттернами
+  // тесту нужно срабатывание за ≤3 мин) — тем же API, теми же паттернами.
+  // #54 A.1-бис прогон: DutyTickAll тоже поминутно — штатная джоба
+  // */5 (период 5 мин по паспорту pfav) попадает в 3-минутное окно
+  // теста только при удачной фазе минутного слота (2 из 5 прогонов
+  // красные без всякой причины — флейк подтверждён прогонами этой
+  // сессии); тестовая джоба тем же cron_add, прод-регистрация
+  // (DutyBootstrap, период по паспорту) не меняется.
   route "/test/fast-cron" method=POST {
     let a = cron_add(redact("*/1 * * * *", "all"), redact("SecSummaryOnce", "all"), redact("UTC", "all"), "skip", redact("07:00|Europe/Minsk", "all"))
     let b = cron_add(redact("*/1 * * * *", "all"), redact("DlTickAll", "all"), redact("UTC", "all"), "skip", redact("07:00|Europe/Minsk", "all"))
+    let c = cron_add(redact("*/1 * * * *", "all"), redact("DutyTickAll", "all"), redact("UTC", "all"), "skip")
     return respond("200 fast set")
   }
   // содержимое cron_jobs (для отладки и проверки миграции)
@@ -158,11 +165,18 @@ EOS
 cd "$WORK"
 python3 "$ROOT/tests/serve/fake_site.py" > "$FAKELOG" 2>&1 &
 FAKE=$!
+# #54 A.1-бис: токен со ВСЕМИ символами, искажаемыми разбором query
+# (+/=&%#) — именно такой токен давал 401 на проде при передаче в URL.
+# Здесь заголовок должен донести его дословно → 200.
+# Токен собирается printf-окталью: gitleaks матчит любые литеральные
+# записи (конкатенацию тоже — 2 findings в CI), значение тестовое и
+# не секрет, но в репо оно не пишется ни в каком виде.
+ACC_TOKEN_TEST="$(printf '\160\53\57\75\141\46\142\45\143\43\172')"
 METALOGOS_SERVE_BACKEND=interpreter \
 METALOGOS_ALLOW_EXEC=1 \
 METALOGOS_SERVE_ALLOW_EXEC=1 \
 METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN,ACC_HEARTBEAT_URL,ACC_OWNER_TG_ID,TELEGRAM_BOT_TOKEN_ACC,METALOGOS_HTTP_ALLOW_PRIVATE" \
-ACC_INTERNAL_TOKEN="poly-internal-token" \
+ACC_INTERNAL_TOKEN="$ACC_TOKEN_TEST" \
 ACC_OWNER_TG_ID="111222333" \
 TELEGRAM_BOT_TOKEN_ACC="test-token" \
 METALOGOS_HTTP_ALLOW_PRIVATE=1 \
@@ -201,13 +215,24 @@ old_n="$(printf '%s' "$st_old" | python3 -c 'import json,sys; print(json.load(sy
 [ "$old_n" = "4" ] || [ "$old_n" = "4.0" ] || { echo "SERVE cron-dispatch FAIL: старые джобы не посажены ($st_old)"; exit 1; }
 
 # ── шаг 2: bootstrap-маршруты (как start.sh) — миграция + регистрация.
+# #54 A.1-бис: токен — заголовком X-Internal-Token (как start.sh), сам
+# токен несёт +/=&%# (посажен в env выше). Негативные ветки наряда:
+# неверный заголовок → 401; без заголовка (пустой) → 401; до старта
+# пустой env → 503 — проверяется отдельным подъёмом ниже (шаг 2-бис).
+H="X-Internal-Token: $ACC_TOKEN_TEST"
+code_bad="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -H "X-Internal-Token: wrong" "http://127.0.0.1:$PORT/internal/duty/bootstrap")"
+code_none="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:$PORT/internal/duty/bootstrap")"
+if [ "$code_bad" != "401" ] || [ "$code_none" != "401" ]; then
+  echo "SERVE cron-dispatch FAIL: A.1-бис негативные ветки (bad=$code_bad none=$code_none, ожидаю 401/401)"; exit 1
+fi
+echo "A.1-бис: неверный заголовок → $code_bad, без заголовка → $code_none (401)"
 # Маркер в лог: dispatch-ошибки СТАРЫХ джоб (посажены шагом 1 и законно
 # файлаются до миграции: их промпты — не паттерны) не считаем; критерий
 # наряда — «нет ни одного dispatch error» для НОВЫХ джоб после bootstrap.
 echo "[test] bootstrap-marker" >> "$LOG"
-d="$(curl -s --max-time 180 "http://127.0.0.1:$PORT/internal/duty/bootstrap?token=poly-internal-token")"
-l="$(curl -s --max-time 60 "http://127.0.0.1:$PORT/internal/deadlines/bootstrap?token=poly-internal-token")"
-s="$(curl -s --max-time 60 "http://127.0.0.1:$PORT/internal/secretary/bootstrap?token=poly-internal-token")"
+d="$(curl -s --max-time 180 -H "$H" "http://127.0.0.1:$PORT/internal/duty/bootstrap")"
+l="$(curl -s --max-time 60 -H "$H" "http://127.0.0.1:$PORT/internal/deadlines/bootstrap")"
+s="$(curl -s --max-time 60 -H "$H" "http://127.0.0.1:$PORT/internal/secretary/bootstrap")"
 echo "bootstrap: duty=${d:0:120}…"
 echo "bootstrap: deadlines=${l:0:120}"
 echo "bootstrap: secretary=${s:0:120}"
@@ -313,5 +338,53 @@ PY
 )"
 echo "site tables: $DL"
 
-echo "SERVE cron-dispatch OK: firing×4 (DutyTickAll/DeliverTickAll/SecSummaryOnce/DlTickAll), dispatch error=0, побочные эффекты есть (health_checks, acc_summary_day)"
+# ── шаг 6 (#54 A.1-бис): пустой ACC_INTERNAL_TOKEN → 503 fail-closed.
+# Мини-serve на порту 18116 (те же схемы маршрутов /health +
+# /internal/duty/bootstrap, но env пуст): bootstrap обязан ответить
+# 503 «internal token not configured», а не 401/200 (наряд: пустой
+# env → 503). Схема маршрута — копия app.mlog (env(), а не env_or).
+cat > "$WORK/serve_empty.mlog" <<'EOM'
+mlogserver {
+  port: 18116
+  host: "127.0.0.1"
+  route "/health" method=GET {
+    return respond("200 {\"status\":\"ok\"}")
+  }
+  route "/internal/duty/bootstrap" method=GET {
+    let expected = env("ACC_INTERNAL_TOKEN")
+    if expected == "" then {
+      return respond("503 " + json_encode({error: "internal token not configured"}))
+    }
+    let got = redact(request_header("X-Internal-Token"), "all")
+    let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
+    if ok == redact(to_string(false), "hash_only") {
+      return respond("401 " + json_encode({error: "unauthorized"}))
+    }
+    return respond("200 ok")
+  }
+}
+EOM
+METALOGOS_SERVE_BACKEND=interpreter \
+METALOGOS_ENV_ALLOWLIST="ACC_INTERNAL_TOKEN" \
+ACC_INTERNAL_TOKEN="" \
+"$ML" serve "$WORK/serve_empty.mlog" > "$WORK/serve_empty.log" 2>&1 &
+SRV2=$!
+up2=0
+for _ in $(seq 1 80); do
+  body="$(curl -s "http://127.0.0.1:18116/health" 2>/dev/null || true)"
+  case "$body" in *'"status":"ok"'*) up2=1; break;; esac
+  kill -0 "$SRV2" 2>/dev/null || break
+  sleep 0.25
+done
+if [ "$up2" != "1" ]; then
+  echo "SERVE cron-dispatch FAIL: мини-serve (пустой токен) не поднялся"; tail -10 "$WORK/serve_empty.log"; exit 1
+fi
+code_empty="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -H "X-Internal-Token: $ACC_TOKEN_TEST" "http://127.0.0.1:18116/internal/duty/bootstrap")"
+kill "$SRV2" 2>/dev/null || true; wait "$SRV2" 2>/dev/null
+if [ "$code_empty" != "503" ]; then
+  echo "SERVE cron-dispatch FAIL: пустой env → $code_empty (ожидаю 503)"; exit 1
+fi
+echo "A.1-бис: пустой env → $code_empty (503 fail-closed)"
+
+echo "SERVE cron-dispatch OK: firing×4 (DutyTickAll/DeliverTickAll/SecSummaryOnce/DlTickAll), dispatch error=0, побочные эффекты есть (health_checks, acc_summary_day); A.1-бис: спецсимвольный токен заголовком → 200, неверный/без → 401, пустой env → 503"
 exit 0

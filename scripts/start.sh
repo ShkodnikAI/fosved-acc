@@ -47,10 +47,21 @@ done
 # D.1.4: три bootstrap-маршрута, только localhost, тело и URL подавлены,
 # одна строка с кодами ответов (duty — до 180 с: при сбое сайта цикл
 # подтверждения ждёт 60 с, tests/serve/duty_serve.sh:81).
+# #54 A.1-бис (аудит 20.11): токен — заголовком X-Internal-Token, не в
+# query. Символы +/=&%# в ACC_INTERNAL_TOKEN искажаются разбором query
+# («+» → пробел и т.д.) → все три маршрута давали 401 при верном токене
+# (оба старта прода 20.11: duty=401 deadlines=401 secretary=401, хранилище
+# cron пустое, [cron] firing = 0). Заголовок доходит дословно — проба 16
+# (probes/16-header-token.mlog: спецсимвольный токен заголовком → match,
+# тот же в query → mismatch). Токен в URL также противоречит правилу
+# «не в URL» (CONTRACT.md §1 снабженца, AGENTS.md §5 АСС).
+# -H выносит значение из командной строки curl в аргумент curl (виден в
+# ps внутри контейнера так же, как прежде в URL) — в лог не попадает:
+# вывод подавлён (-o /dev/null), печатается только строка с кодами.
 if [ -n "${ACC_INTERNAL_TOKEN:-}" ]; then
-  d=$(curl -s -o /dev/null -w '%{http_code}' --max-time 180 "http://127.0.0.1:${PORT}/internal/duty/bootstrap?token=${ACC_INTERNAL_TOKEN}")
-  l=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:${PORT}/internal/deadlines/bootstrap?token=${ACC_INTERNAL_TOKEN}")
-  s=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:${PORT}/internal/secretary/bootstrap?token=${ACC_INTERNAL_TOKEN}")
+  d=$(curl -s -o /dev/null -w '%{http_code}' --max-time 180 -H "X-Internal-Token: ${ACC_INTERNAL_TOKEN}" "http://127.0.0.1:${PORT}/internal/duty/bootstrap")
+  l=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -H "X-Internal-Token: ${ACC_INTERNAL_TOKEN}" "http://127.0.0.1:${PORT}/internal/deadlines/bootstrap")
+  s=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -H "X-Internal-Token: ${ACC_INTERNAL_TOKEN}" "http://127.0.0.1:${PORT}/internal/secretary/bootstrap")
   echo "bootstrap: duty=${d} deadlines=${l} secretary=${s}"
 else
   echo "bootstrap: skipped (ACC_INTERNAL_TOKEN не задан)"

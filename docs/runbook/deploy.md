@@ -106,8 +106,9 @@
    ответа, URL не выводится).
 2. `curl -fsS https://<имя-сервиса>.onrender.com/health` →
    `{"checks":{...},"status":"ok"}`.
-3. `curl -fsS "https://<имя-сервиса>.onrender.com/internal/ledger/verify?token=<ACC_INTERNAL_TOKEN>"`
-   → `{"ok":true,"count":N}` (токен не выводить в логи).
+3. `curl -fsS -H "X-Internal-Token: <ACC_INTERNAL_TOKEN>" "https://<имя-сервиса>.onrender.com/internal/ledger/verify"`
+   → `{"ok":true,"count":N}` (токен — заголовком, не в URL: символы
+   `+/=&%#` искажаются разбором query (#54 A.1-бис); токен не выводить в логи).
 4. Через 15 минут: UptimeRobot — up; Healthchecks — up (пинги пошли).
 5. Написать боту `/status` → ответ с цветом сайтов (ожидание:
    «ТЭГА ПЛЮС — зелёный»).

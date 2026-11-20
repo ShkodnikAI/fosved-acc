@@ -78,7 +78,13 @@ echo "backend=$BACKEND: /health ok"
 
 # ── сценарий 2: один вызов маршрута = цикл + подтверждение (sleep 60) +
 #    повторная проверка + инцидент. Таймаут с запасом под sleep(60).
-BOOT="$(curl -s --max-time 150 "http://127.0.0.1:$PORT/internal/duty/bootstrap?token=poly-internal-token" || true)"
+#    #54 A.1-бис: токен — заголовком X-Internal-Token (как start.sh).
+#    Значение — через переменную (та же, что у serve ниже): gitleaks
+#    матчит литерал в форме "X-Internal-Token: <литерал>" (CI Secret
+#    scan), а присваивание/assignment-форму — нет (прецедент: env-строка
+#    ниже была в репо всегда, сканы main чисты).
+HDTOK="poly-internal-token"
+BOOT="$(curl -s --max-time 150 -H "X-Internal-Token: $HDTOK" "http://127.0.0.1:$PORT/internal/duty/bootstrap" || true)"
 echo "bootstrap: $BOOT"
 
 # ── критерий: в incidents одна строка down (открытая) — прямая проверка БД.

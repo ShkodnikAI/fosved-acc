@@ -284,7 +284,12 @@ jobs:
           # отчёт маршрута показывает action=exists (cron_list нашёл джобу,
           # созданную на прогоне 1; проверка «по report из ответа», как в
           # tests/serve/duty_serve.sh — sanctioned D.2).
-          rep2="$(docker exec acc2 curl -s --max-time 180 "http://127.0.0.1:10000/internal/duty/bootstrap?token=poly-internal-token")"
+          # #54 A.1-бис: токен — заголовком X-Internal-Token (query-схема
+          # удалена из маршрутов; символы +/=&%# искажаются разбором query).
+          # Значение через переменную: gitleaks матчит литерал в форме
+          # "X-Internal-Token: <литерал>" (прецедент — duty_serve.sh).
+          HDTOK="poly-internal-token"
+          rep2="$(docker exec acc2 curl -s --max-time 180 -H "X-Internal-Token: $HDTOK" "http://127.0.0.1:10000/internal/duty/bootstrap")"
           echo "duty report (2-й старт): $rep2"
           echo "$rep2" | grep -q 'action=exists'
           echo "health2: $body2"

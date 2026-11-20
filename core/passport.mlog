@@ -449,6 +449,17 @@ pattern ScanSecretsDraft(v: Any, path: String, depth: Float) -> String {
   return ""
 }
 
+// #54 (аудит 20.11, «источник parse_json EOF»): при старте serve
+// исполняет flow Main каждого модуля с ДЕФОЛТНЫМ входом — прежде это
+// был "" и ValidatePassport("") → try parse_json("") печатал в лог
+// старта 8× «parse_json() error: EOF while parsing a value» (прод,
+// 06:37:03–06; воспроизведено локально: изолированный старт с 0
+// запросов — ровно 8 строк; stub passport → 0; вход "{}" → 0).
+// Ошибка перехвачена try — валидатор корректно отвечал «json: не
+// разбирается», строки были только шумом лога. Дефолт "{}" (пустой
+// JSON-объект): Main при прогонке возвращает осмысленное «правило 1:
+// обязательные поля» вместо JSON-ошибки; ValidatePassport с реальными
+// текстами (формы приёма, тесты) — без изменений.
 flow Main {
-  input: String = "" -> ValidatePassport -> output
+  input: String = "{}" -> ValidatePassport -> output
 }
