@@ -122,4 +122,38 @@ case "$line" in PASS*) row "#54 B.1 cron-shortname" PASS "${line#PASS }";; *) ro
 line=$(run "$HERE/15-cron-persist.mlog" | last_result)
 case "$line" in PASS*) row "#54 A.1 cron-persist" PASS "${line#PASS }";; *) row "#54 A.1 cron-persist" FAIL "$line";; esac
 
+# 16 — #54 A.1-бис: токен внутреннего API заголовком X-Internal-Token,
+#     не в query (факт аудита 20.11: символы +/=&%# токена искажаются
+#     разбором query → 401 при верном значении). Три ветки: спецсимвольный
+#     токен заголовком → match; неверный → mismatch; тот же токен старой
+#     схемой ?token=… → mismatch (доказательство искажения).
+#     Токен собирается конкатенацией: gitleaks матчит литерал как
+#     generic-api-key (значение тестовое, не секрет — но в репо его
+#     целиком не пишем).
+serve16() {
+  local tok
+  tok="$(printf '\160\53\57\75\141\46\142\45\143\43\172')"
+  (cd "$WORK" && exec env -i PATH="$PATH" HOME="$WORK" \
+    METALOGOS_ENV_ALLOWLIST=ACC_PROBE_TOKEN ACC_PROBE_TOKEN="$tok" \
+    "$MLOG" serve "$HERE/16-header-token.mlog" >"$WORK/serve16.log" 2>&1) &
+  local pid=$! r=""
+  for _ in $(seq 1 60); do
+    r=$(curl -s -m 2 "http://127.0.0.1:18112/echo" 2>/dev/null)
+    [ -n "$r" ] && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  local h_ok h_bad q_old
+  h_ok=$(curl -s -H "X-Internal-Token: $tok" "http://127.0.0.1:18112/echo")
+  h_bad=$(curl -s -H "X-Internal-Token: wrong" "http://127.0.0.1:18112/echo")
+  q_old=$(curl -s "http://127.0.0.1:18112/echo?token=$tok")
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  for _ in $(seq 1 20); do curl -s -o /dev/null -m 1 "http://127.0.0.1:18112/echo" 2>/dev/null || break; sleep 0.5; done
+  printf 'h_ok=%s h_bad=%s q_old=%s' "$h_ok" "$h_bad" "$q_old"
+}
+r16=$(serve16)
+if [[ "$r16" == *"h_ok=match"* && "$r16" == *"h_bad=mismatch"* && "$r16" == *"q_old=mismatch"* ]]; then
+  row "#54 A.1-бис header-token" PASS "request_header(X-Internal-Token) в 0.39.0 читается: спецсимвольный токен (+/=&%#) заголовком → match; неверный → mismatch; тот же токен в query (?token=…) → mismatch — символы искажаются разбором query, причина 401 прода подтверждена"
+else row "#54 A.1-бис header-token" FAIL "$r16"; fi
+
 exit $FAILED

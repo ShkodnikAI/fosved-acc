@@ -56,10 +56,15 @@ mlogserver {
   }
 
   // Наряд АСС-1.2 A.3: верификация подписанного журнала.
-  // Токен: в 0.32.0 нет чтения заголовков запроса (request_header в
-  // builtins отсутствует — проверено по src), поэтому токен передаётся
-  // параметром ?token= и сравнивается hash_only с обеих сторон (рецепт
-  // #546 FOSVED-office-v2). Fail-closed: пустой ACC_INTERNAL_TOKEN — 503
+  // Токен: #54 A.1-бис (аудит 20.11) — заголовком X-Internal-Token, не
+  // query. В 0.32.0 request_header не существовал, токен передавался
+  // параметром ?token=; в 0.39.0 request_header есть (проба 16) —
+  // символы +/=&%# в query искажаются разбором (+ → пробел и т.д.),
+  // что давало 401 на проде при верном ACC_INTERNAL_TOKEN (оба старта
+  // 20.11: duty=401 deadlines=401 secretary=401). Токен в URL также
+  // противоречит правилу «не в URL» (CONTRACT.md §1 снабженца, AGENTS
+  // §5). Сравнение — hash_only с обеих сторон (рецепт #546
+  // FOSVED-office-v2). Fail-closed: пустой ACC_INTERNAL_TOKEN — 503
   // «не настроено», не открытый доступ. env() читается только из
   // METALOGOS_ENV_ALLOWLIST (AGENTS §6).
   route "/internal/ledger/verify" method=GET {
@@ -69,7 +74,7 @@ mlogserver {
     if expected == "" then {
       return respond("503 " + json_encode({error: "internal token not configured"}))
     }
-    let got = redact(query_param("token"), "all")
+    let got = redact(request_header("X-Internal-Token"), "all")
     let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
     if ok == REF_FALSE then {
       return respond("401 " + json_encode({error: "unauthorized"}))
@@ -91,7 +96,7 @@ mlogserver {
     if expected == "" then {
       return respond("503 " + json_encode({error: "internal token not configured"}))
     }
-    let got = redact(query_param("token"), "all")
+    let got = redact(request_header("X-Internal-Token"), "all")
     let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
     if ok == REF_FALSE then {
       return respond("401 " + json_encode({error: "unauthorized"}))
@@ -110,7 +115,7 @@ mlogserver {
     if expected == "" then {
       return respond("503 " + json_encode({error: "internal token not configured"}))
     }
-    let got = redact(query_param("token"), "all")
+    let got = redact(request_header("X-Internal-Token"), "all")
     let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
     if ok == REF_FALSE then {
       return respond("401 " + json_encode({error: "unauthorized"}))
@@ -136,7 +141,7 @@ mlogserver {
     if expected == "" then {
       return respond("503 " + json_encode({error: "internal token not configured"}))
     }
-    let got = redact(query_param("token"), "all")
+    let got = redact(request_header("X-Internal-Token"), "all")
     let ok = redact(to_string(redact(got, "hash_only") == redact(expected, "hash_only")), "hash_only")
     if ok == REF_FALSE then {
       return respond("401 " + json_encode({error: "unauthorized"}))
