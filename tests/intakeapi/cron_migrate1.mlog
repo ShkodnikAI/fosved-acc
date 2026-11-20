@@ -1,0 +1,76 @@
+// Тест B.2 наряда #54 (АСС-1.16): миграция старых cron-джоб —
+// внутри-процессная часть (посадка старых + bootstrap одним прогоном;
+// МЕЖПРОЦЕССНАЯ часть — в serve-тесте tests/serve/cron_dispatch.sh:
+// kv-хранилище переживает процессы только под serve, в mlog run
+// memory{persist} не активируется — memory.db 0 байт, проба сессии).
+// Сценарий: посадка старых джоб (duty-tick, secretary-deliver,
+// secretary-summary-*, deadlines-tick-*) → тот же bootstrap →
+// старые сняты, новые на месте. Ожидаемо:
+// CRONMIG dl07=1 duty=1 old=0 removed_duty_old=1
+//   old  — старых джоб (duty-tick/secretary-deliver/secretary-summary-*/
+//          deadlines-tick-*) в хранилище после bootstrap (чистый старт: 0).
+// Прогон 2 (cron_migrate2.mlog) сажает СТАРЫЕ джобы руками и зовёт
+// bootstrap: старые обязаны быть сняты, новые — по одной.
+
+import modules/duty/schedule as ds
+import modules/deadlines/run as dl
+import modules/secretary/deliver as sec
+
+db { url: "sqlite:data/acc.db" }
+// #54 B.2: cron_jobs живёт в kv_store data/memory.db (тот же файл,
+// что у app.mlog); без блока kv ин-мемори в этом процессе и джобы
+// не переживают границу процессов (проба этой сессии).
+memory { persist: "data/memory.db" }
+
+pattern CountPromptPayload(p: String, pl: String) -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut found = 0.0
+  each j in cron_list() {
+    let hp = redact(to_string(to_string(j.prompt) == p), "hash_only")
+    let hpl = redact(to_string(to_string(j.payload) == pl), "hash_only")
+    if hp == REF_TRUE {
+      if hpl == REF_TRUE {
+        found = found + 1.0
+      }
+    }
+  }
+  return to_string(found)
+}
+
+pattern CountOld() -> String {
+  let REF_TRUE = redact(to_string(true), "hash_only")
+  let mut found = 0.0
+  each j in cron_list() {
+    let p = to_string(j.prompt)
+    let o1 = redact(to_string(p == "duty-tick"), "hash_only")
+    let o2 = redact(to_string(p == "secretary-deliver"), "hash_only")
+    let o3 = redact(to_string(contains(p, "secretary-summary-")), "hash_only")
+    let o4 = redact(to_string(contains(p, "deadlines-tick-")), "hash_only")
+    if o1 == REF_TRUE { found = found + 1.0 }
+    if o2 == REF_TRUE { found = found + 1.0 }
+    if o3 == REF_TRUE { found = found + 1.0 }
+    if o4 == REF_TRUE { found = found + 1.0 }
+  }
+  return to_string(found)
+}
+
+pattern Main1(_: String) -> String {
+  // «прошлый релиз» оставил старые джобы (имена-НЕ-паттерны)
+  let _ = cron_add(redact("*/5 * * * *", "all"), redact("duty-tick", "all"), redact("Europe/Minsk", "all"), "skip")
+  let _ = cron_add(redact("*/1 * * * *", "all"), redact("secretary-deliver", "all"), redact("UTC", "all"), "skip")
+  let _ = cron_add(redact("0 7 * * *", "all"), redact("secretary-summary-07:00-Europe/Minsk", "all"), redact("Europe/Minsk", "all"), "skip")
+  let _ = cron_add(redact("0 7 * * *", "all"), redact("deadlines-tick-07:00-Europe/Minsk", "all"), redact("Europe/Minsk", "all"), "skip")
+  let rep_d = ds.DutyBootstrap()
+  let rep_l = dl.DlBootstrap()
+  let rep_s = sec.SecBootstrap()
+  let dl07 = CountPromptPayload("DlTickAll", "07:00|Europe/Minsk")
+  let duty = CountPromptPayload("DutyTickAll", "")
+  let old = CountOld()
+  print("CRONMIG dl07=" + dl07 + " duty=" + duty + " old=" + old)
+  print("CRONMIGREP " + redact(rep_d, "all") + " || " + redact(rep_l, "all") + " || " + redact(rep_s, "all"))
+  return "cronmig done"
+}
+
+flow Main {
+  input: String = "" -> Main1 -> output
+}

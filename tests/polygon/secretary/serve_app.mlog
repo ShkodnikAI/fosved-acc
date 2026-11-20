@@ -80,7 +80,7 @@ mlogserver {
   }
 
   route "/test/summary" method=GET {
-    let r = sec.SecSummaryOnce()
+    let r = sec.SecSummaryOnce("07:00|Europe/Minsk")  // #54 B.1
     return respond("200 " + redact(r, "all"))
   }
 

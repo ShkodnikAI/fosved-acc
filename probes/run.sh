@@ -9,6 +9,7 @@
 set -u
 MLOG="${1:-mlog}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 WORK="$(mktemp -d)"
 FAKE_LOG="$WORK/fake.log"
 FAILED=0
@@ -105,5 +106,20 @@ else row "B.9 llm-per-provider" FAIL "до резерва beta запрос не
 
 line=$(run "$HERE/10-llm-timeout.mlog" METALOGOS_HTTP_ALLOW_PRIVATE=1 ACC_KEY_ALPHA=ka | last_result)
 case "$line" in PASS*) row "B.10 llm-timeout" PASS "${line#PASS }";; *) row "B.10 llm-timeout" FAIL "$line";; esac
+
+# 14 — #54 B.1: короткое имя паттерна при cron-файринге (осн. программа
+#     + импортированный модуль; cron_run под мандатом ADR-0205).
+#     В отличие от остальных проб, запускается из КОРНЯ репо: проба
+#     импортирует modules/duty/schedule (гейт #523 резолвит импорты по
+#     файловой системе относительно запускаемого файла).
+line=$( (cd "$ROOT" && env -i PATH="$PATH" HOME="$WORK" METALOGOS_ALLOW_EXEC=1 \
+         "$MLOG" run "$HERE/14-cron-shortname.mlog" 2>&1) | last_result)
+case "$line" in PASS*) row "#54 B.1 cron-shortname" PASS "${line#PASS }";; *) row "#54 B.1 cron-shortname" FAIL "$line";; esac
+
+# 15 — #54 A.1/B.2: cron_jobs в kv_store, payload roundtrip; факт:
+#     в mlog run memory{persist} не материализуется (0 байт) —
+#     межпроцессная часть в serve-тесте cron_dispatch.sh
+line=$(run "$HERE/15-cron-persist.mlog" | last_result)
+case "$line" in PASS*) row "#54 A.1 cron-persist" PASS "${line#PASS }";; *) row "#54 A.1 cron-persist" FAIL "$line";; esac
 
 exit $FAILED

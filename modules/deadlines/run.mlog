@@ -253,8 +253,13 @@ pattern RunCheck(name: String, domain: String) -> String {
   return "unknown kind=" + name
 }
 
-pattern DlTickAll() -> String {
-  // таргет крона: суточный проход по всем паспортам с модулем deadlines
+pattern DlTickAll(payload: String) -> String {
+  // таргет крона: суточный проход по всем паспортам с модулем deadlines.
+  // #54 B.1: параметр payload — 5-й аргумент cron_add («daily_at|tz»,
+  // cron_dispatch_args передаёт его одним String, cron.rs:975). Тело от
+  // payload не зависит (проход идёт по всем паспортам сразу — джоба на
+  // каждую пару daily_at/tz срабатывает в СВОЁ время суток); параметр
+  // нужен, чтобы serve нашёл паттерн по сигнатуре при диспатче.
   let REF_TRUE = redact(to_string(true), "hash_only")
   let mut done = 0.0
   let mut rep = ""
@@ -274,7 +279,7 @@ pattern DlTickAll() -> String {
       }
     }
   }
-  return "deadlines tick sites=" + to_string(done) + "\n" + rep
+  return "deadlines tick sites=" + to_string(done) + " payload=" + payload + "\n" + rep
 }
 
 pattern DlBootstrap() -> String {
@@ -299,26 +304,43 @@ pattern DlBootstrap() -> String {
         let hm = split(daily_at, ":")
         let h = to_string(to_float(to_string(get(hm, 0.0))))
         let m = to_string(to_float(to_string(get(hm, 1.0))))
-        let prompt = "deadlines-tick-" + daily_at + "-" + tz
+        // #54 B.1: prompt = ИМЯ ПАТТЕРНА (DlTickAll). serve диспатчит
+        // prompt как pattern (server.rs:2557; «fires due jobs by calling
+        // the prompt as a pattern», cron.rs:343) — прежний
+        // «deadlines-tick-<daily_at>-<tz>» не был паттерном →
+        // [CRON_JOB_FAILED] unknown pattern. Пара daily_at/tz различается
+        // 5-м аргументом payload (cron_add(expr, target, tz, catch_up,
+        // payload), cron.rs:346; передаётся паттерну одним String —
+        // cron_dispatch_args, cron.rs:975). Сверка «уже есть» — по паре
+        // prompt+payload.
+        let prompt = "DlTickAll"
+        let w_payload = daily_at + "|" + tz
         let expr = m + " " + h + " * * *"
-        wanted = wanted + prompt + "|" + expr + "|" + tz + "\n"
-        wanted_prompts = wanted_prompts + prompt + "\n"
+        wanted = wanted + prompt + ";" + expr + ";" + tz + ";" + w_payload + "\n"
+        wanted_prompts = wanted_prompts + prompt + "|" + w_payload + "\n"
       }
     }
   }
-  // 2) существующие prompt'ы крона одной строкой
+  // 2) существующие пары prompt+payload крона одной строкой
+  //    (#54 B.1: сверка по ПАРЕ — один и тот же паттерн DlTickAll
+  //    регистрируется на несколько пар daily_at/tz, различие — payload)
   let mut cron_prompts = ""
   each cj in cron_list() {
-    cron_prompts = cron_prompts + to_string(cj.prompt) + "\n"
+    cron_prompts = cron_prompts + to_string(cj.prompt) + "|" + to_string(cj.payload) + "\n"
   }
-  // 3) устаревшие джобы (prompt сменился после правки daily_at/tz) — снять
+  // 3) устаревшие джобы — снять: (а) #54 B.2: старые промпты-НЕ-паттерны
+  //    («deadlines-tick-*»); (б) пары, которых больше нет в паспортах
+  //    (смена daily_at/tz). Удаление по id (cron_remove(id)).
   let mut removed = 0.0
   each cj in cron_list() {
-    let is_dl = redact(to_string(contains(to_string(cj.prompt), "deadlines-tick")), "hash_only")
-    if is_dl == REF_TRUE {
-      let in_wanted = redact(to_string(contains(wanted_prompts, to_string(cj.prompt))), "hash_only")
+    let p = to_string(cj.prompt)
+    let is_dl = redact(to_string(contains(p, "deadlines-tick")), "hash_only")
+    let is_new = redact(to_string(p == "DlTickAll"), "hash_only")
+    if is_dl == REF_TRUE or is_new == REF_TRUE {
+      let pair = p + "|" + to_string(cj.payload)
+      let in_wanted = redact(to_string(contains(wanted_prompts, pair)), "hash_only")
       if in_wanted != REF_TRUE {
-        let _ = cron_remove(to_string(cj.prompt))
+        let _ = cron_remove(to_string(cj.id))
         removed = removed + 1.0
       }
     }
@@ -332,13 +354,14 @@ pattern DlBootstrap() -> String {
       // имена уникальны в пределах паттерна: VM 0.32.0 на повторное
       // объявление prompt/expr/tz (как в части 1 выше) отвечает
       // TYPE_MISMATCH "String + Float" (проба этой сессии)
-      let pf = split(wl, "|")
+      let pf = split(wl, ";")
       let w_prompt = to_string(get(pf, 0.0))
       let w_expr = to_string(get(pf, 1.0))
       let w_tz = to_string(get(pf, 2.0))
-      let have = redact(to_string(contains(cron_prompts, w_prompt)), "hash_only")
+      let w_payload = to_string(get(pf, 3.0))
+      let have = redact(to_string(contains(cron_prompts, w_prompt + "|" + w_payload)), "hash_only")
       if have != REF_TRUE {
-        let _ = cron_add(w_expr, w_prompt, w_tz, "skip")
+        let _ = cron_add(w_expr, w_prompt, w_tz, "skip", w_payload)
         created = created + 1.0
       }
     }

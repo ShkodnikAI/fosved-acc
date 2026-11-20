@@ -1,13 +1,17 @@
 // Тест A.5.5, прогон 1 (наряд АСС-2.6): старт приложения №1 — паспорт
 // сайта one БЕЗ модуля duty. Регистрация расписаний при старте (#39):
-//   - Дедлайны: joba deadlines-tick-07:00-Europe/Minsk (из паспорта one);
-//   - Дежурный: duty-tick НЕ регистрируется (ни у одного паспорта нет duty).
+//   - Дедлайны: джоба DlTickAll c payload 07:00|Europe/Minsk (#54 B.1);
+//   - Дежурный: DutyTickAll НЕ регистрируется (ни у одного паспорта нет duty).
 // Ожидаемо: CRON1 dl07=1 duty=0
 
 import modules/duty/schedule as ds
 import modules/deadlines/run as dl
 
 db { url: "sqlite:data/acc.db" }
+// #54 B.2: cron_jobs живёт в kv_store data/memory.db (тот же файл,
+// что у app.mlog); без блока kv ин-мемори в этом процессе и джобы
+// не переживают границу процессов (проба этой сессии).
+memory { persist: "data/memory.db" }
 
 pattern HasPrompt(p: String) -> String {
   let REF_TRUE = redact(to_string(true), "hash_only")
@@ -25,8 +29,8 @@ pattern Main1(_: String) -> String {
   // старт: регистрация расписаний (как start.sh после /health)
   let _ = ds.DutyBootstrap()
   let _ = dl.DlBootstrap()
-  let dl07 = HasPrompt("deadlines-tick-07:00-Europe/Minsk")
-  let duty = HasPrompt("duty-tick")
+  let dl07 = HasPrompt("DlTickAll")
+  let duty = HasPrompt("DutyTickAll")
   print("CRON1 dl07=" + dl07 + " duty=" + duty)
   return "cron1 done"
 }

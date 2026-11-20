@@ -1,0 +1,34 @@
+// #54 A.1/B.2 (АСС-1.16): персистентность cron-хранилища.
+// Проверяет: cron_jobs живёт в kv_store (ключ 'cron_jobs') файла
+// memory { persist } — джобы переживают рестарт ПРОЦЕССА (serve).
+// ВАЖНОЕ ОГРАНИЧЕНИЕ (факт этой сессии для отчёта): в mlog run
+// (интерпретатор run-режима) memory { persist } НЕ материализуется —
+// файл создаётся пустым (0 байт, без таблиц); kv-persist активен
+// только под serve. Поэтому проба проверяет внутрипроцессную запись
+// (cron_add → kv_get-эквивалент через cron_list после пересоздания
+// джоб) и регистрирует факт ограничения для B.2: межпроцессная
+// миграция проверяется serve-тестом (tests/serve/cron_dispatch.sh).
+pattern Main1(x: String) -> String {
+  // 1) регистрация: id и payload возвращаются
+  let a = cron_add(redact("*/5 * * * *", "all"), redact("ProbePersist", "all"), redact("UTC", "all"), "skip", redact("07:00|Europe/Minsk", "all"))
+  let id = to_string(a.id)
+  if id == "" then { return "FAIL 15-cron-persist: пустой id" }
+  // 2) cron_list видит джобу с payload
+  let mut seen = false
+  let mut payload_ok = false
+  each j in cron_list() {
+    let hit = redact(to_string(to_string(j.id) == id), "hash_only")
+    if hit == redact(to_string(true), "hash_only") {
+      seen = true
+      let pl = redact(to_string(to_string(j.payload) == "07:00|Europe/Minsk"), "hash_only")
+      if pl == redact(to_string(true), "hash_only") { payload_ok = true }
+    }
+  }
+  let _ = cron_remove(id)
+  if seen != true then { return "FAIL 15-cron-persist: джобы нет в cron_list" }
+  if payload_ok != true then { return "FAIL 15-cron-persist: payload не прочитан из cron_list" }
+  return "PASS 15-cron-persist: cron_add/list/remove + payload roundtrip; kv-persist (переживание рестарта serve) — serve-тест #54 C.1; в mlog run persist не материализуется (факт для B.2)"
+}
+flow Main {
+  input: String = "" -> Main1 -> output
+}

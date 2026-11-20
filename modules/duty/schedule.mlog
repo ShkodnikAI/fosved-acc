@@ -58,7 +58,10 @@ pattern DutyPeriod(passport_text: String) -> Float {
 }
 
 pattern DutyTickAll() -> String {
-  // таргет крона: один проход Дежурного по всем паспортам с duty
+  // таргет крона: один проход Дежурного по всем паспортам с duty.
+  // #54 B.1: zero-arg — джоба Дежурного регистрируется БЕЗ payload
+  // (пустой payload диспатчер передаёт как 0 аргументов — проба этой
+  // сессии: паттерн с параметром получал «expects 1 args, got 0»).
   let mut done = 0.0
   let mut rep = ""
   each e in list_dir("data/sites") {
@@ -98,13 +101,25 @@ pattern DutyBootstrap() -> String {
       }
     }
   }
-  // идемпотентность: счёт duty-tick-джоб — each на ВЕРХНЕМ уровне
+  // идемпотентность: счёт DutyTickAll-джоб — each на ВЕРХНЕМ уровне
   // (each внутри if в VM-бэкенде не исполняется — проба в отчёте);
-  // cron_list перед cron_add — дублей не создаём
+  // cron_list перед cron_add — дублей не создаём.
+  // #54 B.1: prompt = ИМЯ ПАТТЕРНА DutyTickAll (serve диспатчит prompt
+  // как pattern, server.rs:2557; прежний «duty-tick» не был паттерном →
+  // [CRON_JOB_FAILED] unknown pattern). #54 B.2: старые «duty-tick»
+  // джобы (если остались с прошлых стартов) снимаются как устаревшие.
   let mut found_n = 0.0
+  let mut removed_old = 0.0
   each j in cron_list() {
-    if redact(to_string(j.prompt == "duty-tick"), "hash_only") == REF_TRUE {
+    let p = to_string(j.prompt)
+    let is_new = redact(to_string(p == "DutyTickAll"), "hash_only")
+    let is_old = redact(to_string(p == "duty-tick"), "hash_only")
+    if is_new == REF_TRUE {
       found_n = found_n + 1.0
+    }
+    if is_old == REF_TRUE {
+      let _ = cron_remove(to_string(j.id))
+      removed_old = removed_old + 1.0
     }
   }
   let expr = "*/" + to_string(period) + " * * * *"
@@ -113,11 +128,11 @@ pattern DutyBootstrap() -> String {
     if redact(to_string(found_n >= 1.0), "hash_only") == REF_TRUE {
       action = "exists"
     } else {
-      let _ = cron_add(expr, "duty-tick", "Europe/Minsk", "skip")
+      let _ = cron_add(expr, "DutyTickAll", "Europe/Minsk", "skip")
       action = "created"
     }
   }
   // одна проверка сразу (ТЗ §15 — без пачки)
   let run = DutyTickAll()
-  return "bootstrap: period=" + to_string(period) + " action=" + action + "\n" + run
+  return "bootstrap: period=" + to_string(period) + " action=" + action + " removed_old=" + to_string(removed_old) + "\n" + run
 }

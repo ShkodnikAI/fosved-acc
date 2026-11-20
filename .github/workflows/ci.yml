@@ -116,7 +116,7 @@ jobs:
           grep -q "INTAKEAPI OK 6/6" intakeapi.out
 
   serve:
-    name: "Serve: Дежурный под mlog serve (АСС-1.7 A.2)"
+    name: "Serve: Дежурный + cron→паттерн (#54 C.1)"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +127,11 @@ jobs:
           chmod +x /usr/local/bin/mlog
       - name: Сценарий 2 под serve — interpreter (блокирующий; Dockerfile AСС-1.7)
         run: bash tests/serve/duty_serve.sh mlog interpreter
+      # #54 C.1 (АСС-1.16): путь «cron сработал → паттерн исполнен» —
+      # посадка старых джоб → bootstrap (миграция B.2) → firing ×4,
+      # 0 dispatch error после bootstrap, побочные эффекты. До 8 мин.
+      - name: "Cron→паттерн: firing×4, 0 dispatch error (#54 C.1)"
+        run: bash tests/serve/cron_dispatch.sh mlog
       - name: "VM: Metalogos-#1430 (ожидаемо красный — сигнал к возврату на VM, ADR-0003)"
         continue-on-error: true
         run: |

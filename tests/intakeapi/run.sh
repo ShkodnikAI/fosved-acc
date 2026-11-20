@@ -132,9 +132,20 @@ METALOGOS_HTTP_ALLOW_PRIVATE=1 "$ML" run tests/intakeapi/cron_run2.mlog > /tmp/a
 cat /tmp/acc-cron2.out /tmp/acc-cron2.err > /tmp/acc-cron2.all || true
 cat /tmp/acc-cron2.out || true
 grep -q "CRON2 dl07=1 dl0830=1 duty=1" /tmp/acc-cron2.all
-chk "$?" "A.5.5 (2/2): рестарт → duty-tick для нового slug + deadlines-джоба 08:30"
+chk "$?" "A.5.5 (2/2): рестарт → DutyTickAll для нового slug + DlTickAll 08:30"
 grep -q "two: duty" /tmp/acc-cron2.all
 chk "$?" "A.5.5: немедленный тик Дежурного прошёл по новому slug"
+
+# ── #54 B.2: миграция старых джоб — внутри-процессная проверка.
+#    Межпроцессная (хранилище со старыми джобами ДО старта serve →
+#    bootstrap-маршрут) — в serve-тесте tests/serve/cron_dispatch.sh:
+#    в mlog run kv-persist не активируется (memory.db 0 байт, проба
+#    сессии), cron_jobs переживают границу процессов только под serve.
+METALOGOS_HTTP_ALLOW_PRIVATE=1 "$ML" run tests/intakeapi/cron_migrate1.mlog > /tmp/acc-cronmig1.out 2>&1
+cat /tmp/acc-cronmig1.out || true
+grep -q "CRONMIG dl07=1 duty=1 old=0" /tmp/acc-cronmig1.out
+grep -q "removed_old=1" /tmp/acc-cronmig1.out
+chk "$?" "#54 B.2: отчёт DutyBootstrap — старая duty-tick снята (removed_old=1)"
 
 # ── черновики + инициализация tfake (идемпотентно) ──
 METALOGOS_HTTP_ALLOW_PRIVATE=1 "$ML" run tests/intakeapi/fixture.mlog > /tmp/acc-fixture.out 2>&1
