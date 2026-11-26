@@ -51,8 +51,12 @@ mlogserver {
     let mut status = "ok"
     if data_ok == false or db_ok == false then { let status = "degraded" }
     let body = json_encode({status: status, checks: {data_dir: data_ok, sqlite: db_ok}})
-    if status == "ok" then { return respond("200 " + body) }
-    return respond("503 " + body)
+    // №952 (переход v0.40.1, 25.11): query()-результат несёт private-метку
+    // (консервативная политика БД; фактические значения — булевы, секрета
+    // нет) — runtime-линия ловит это на respond. Мост redact(…, "all") по
+    // таблице ADR-0154 §10: значение не искажается, egress в audit-логе.
+    if status == "ok" then { return respond("200 " + redact(body, "all")) }
+    return respond("503 " + redact(body, "all"))
   }
 
   // Наряд АСС-1.2 A.3: верификация подписанного журнала.

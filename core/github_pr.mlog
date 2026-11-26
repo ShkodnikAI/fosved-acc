@@ -38,7 +38,12 @@ pattern GhHeaders(token: String) -> Any {
   return {Authorization: "Bearer " + token, Accept: "application/vnd.github+json"}
 }
 
-pattern GhField(resp: Any, json_path: String, field: String) -> String {
+// №952 (переход v0.40.1, 26.11): аннотация <public> — явное требование
+// конфиденциальности (§12.2(б), ADR-0154): без неё граница вызова несёт
+// 'private, trusted' в VM-лэйне (факт пробы 26.11) и URL следующего шага
+// отказывает. Вызывающий передаёт ответ http (public, untrusted) —
+// требование clears, метка источника сохраняется сквозь тело.
+pattern GhField(resp: Any<public>, json_path: String, field: String) -> String {
   // поле из JSON-ответа по пути глубины ≤2: parse → json_get (офисный рецепт);
   // Err/отсутствие — ""
   let text = to_string(resp)
@@ -80,7 +85,11 @@ pattern OpenPR(path: String, new_text: String, title: String, body: String) -> S
     return "error: не настроен ACC_GITHUB_TOKEN (docs/runbook/deploy.md, шаг 2)"
   }
   let base = try env_or("ACC_GITHUB_API_BASE", "https://api.github.com")
-  let mut base_s = to_string(base)
+  // №952 (переход v0.40.1, 26.11): адресный аргумент http_* гейтится по
+  // конфиденциальности; env-значение несёт private. Мост redact(…, "all")
+  // (ADR-0154 §10): base — публичный адрес (не секрет), low-entropy —
+  // значение не маскируется (проба 26.11).
+  let mut base_s = redact(to_string(base), "all")
   let base_empty = redact(to_string(base_s == "()" or base_s == ""), "hash_only")
   if base_empty == REF_TRUE {
     base_s = "https://api.github.com"

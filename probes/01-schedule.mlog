@@ -9,12 +9,12 @@
 pattern Main1(x: String) -> String {
   let job = cron_add("*/5 * * * *", "acc-probe-tick", "Europe/Minsk", "skip")
   let id = to_string(job.id)
-  if id == "" then { return "FAIL 01-schedule: cron_add вернул пустой id" }
+  if id == "" then { return redact("FAIL 01-schedule: cron_add вернул пустой id", "all") }
   let mut found = false
   each j in cron_list() {
     if to_string(j.id) == id then { let found = true }
   }
-  if found == false then { return "FAIL 01-schedule: задания нет в cron_list" }
+  if found == false then { return redact("FAIL 01-schedule: задания нет в cron_list", "all") }
   let mandate = approval_issue("probe", "carrier:cron_run", 60)
   let r1 = cron_run(id)
   let r2 = cron_mark_fired(id)
@@ -23,9 +23,9 @@ pattern Main1(x: String) -> String {
     if to_string(j.id) == id then { let runs = j.run_count }
   }
   let rm = cron_remove(id)
-  if runs < 1.0 then { return "FAIL 01-schedule: run_count не вырос после cron_mark_fired (" + to_string(runs) + ")" }
-  if to_string(rm.removed) != "1" then { return "FAIL 01-schedule: cron_remove не удалил задание" }
-  return "PASS 01-schedule: add/list/run/mark_fired/remove работают; tz и catch_up принимаются; cron_run/cron_mark_fired/cron_remove возвращают Struct, а не Float, как пишет REFERENCE §4.17.3"
+  if runs < 1.0 then { return redact("FAIL 01-schedule: run_count не вырос после cron_mark_fired (" + to_string(runs) + ")", "all") }
+  if to_string(rm.removed) != "1" then { return redact("FAIL 01-schedule: cron_remove не удалил задание", "all") }
+  return redact("PASS 01-schedule: add/list/run/mark_fired/remove работают; tz и catch_up принимаются; cron_run/cron_mark_fired/cron_remove возвращают Struct, а не Float, как пишет REFERENCE §4.17.3", "all")
 }
 flow Main {
   input: String = "" -> Main1 -> output

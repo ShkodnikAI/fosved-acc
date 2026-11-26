@@ -118,7 +118,8 @@ pattern DutyBootstrap() -> String {
       found_n = found_n + 1.0
     }
     if is_old == REF_TRUE {
-      let _ = cron_remove(to_string(j.id))
+      // №952: мост id из cron_list (см. deadlines/run.mlog).
+      let _ = cron_remove(redact(to_string(j.id), "all"))
       removed_old = removed_old + 1.0
     }
   }

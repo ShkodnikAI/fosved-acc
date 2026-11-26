@@ -79,8 +79,12 @@ pattern SecSendAppButton() -> String {
     let _ = db_execute_with_grant(gi, "INSERT INTO mock_sends (ts, text) VALUES (?1, ?2)", [now(), "[app-button] sent"])
     return "ok"
   }
-  // прод: кнопка web_app (reply_markup), opts bot: "acc" — как в SecSend
-  let r = try send_message(env_or("ACC_OWNER_TG_ID", ""), "Вход в АСС (ссылка на 30 минут):", {inline_keyboard: [[{text: "Открыть АСС", web_app: {url: url}}]]}, {bot: "acc"})
+  // прод: кнопка web_app (reply_markup), opts bot: "acc" — как в SecSend.
+  // №952 (переход v0.40.1, 25.11): оба приват-аргумента уходят владельцу
+  // СОЗНАТЕЛЬНО (chat_id из env; URL одноразовой сессии — выдача только
+  // владельцу, гвард в SecWebhook). Мост redact(…, "all") по таблице
+  // ADR-0154 §10: значение не искажается, egress виден в audit-логе.
+  let r = try send_message(redact(env_or("ACC_OWNER_TG_ID", ""), "all"), "Вход в АСС (ссылка на 30 минут):", {inline_keyboard: [[{text: "Открыть АСС", web_app: {url: redact(url, "all")}}]]}, {bot: "acc"})
   let NONE = redact("()", "hash_only")
   let is_err = redact(to_string(r), "hash_only")
   if is_err == NONE {
@@ -110,8 +114,10 @@ pattern SecSend(chat_id: String, text: String) -> String {
 }
 
 pattern SecReply(text: String) -> String {
-  // ответ владельцу: chat_id — env (не выводится в ответы и логи)
-  let owner = env_or("ACC_OWNER_TG_ID", "")
+  // ответ владельцу: chat_id — env (не выводится в ответы и логи).
+  // №952 (переход v0.40.1, 25.11): chat_id — аргумент 0 send_message в
+  // SecSend (санкционированный egress владельцу) — мост redact(…, "all").
+  let owner = redact(env_or("ACC_OWNER_TG_ID", ""), "all")
   return SecSend(owner, text)
 }
 

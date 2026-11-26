@@ -132,7 +132,11 @@ pattern DutyHandleVerdicts(slug: String, fails: String, base: String, health_url
     if has_kind != REF_TRUE {
       let open_id = inc.DutyOpenIncident(slug, kind)
       if redact(to_string(open_id >= 0.0), "hash_only") == REF_TRUE {
-        let mk = "acc_clean_" + slug + ":" + kind
+        // №952 (переход v0.40.1, 25.11): slug из паспорта (untrusted) —
+        // kv-ключ с untrusted-меткой = TAINT_PERSISTENCE в runtime-линии;
+        // мост redact(…, "all") у источника (ADR-0154 §10): значение ключа
+        // не искажается — kv_exists/kv_delete ниже используют тот же mk.
+        let mk = redact("acc_clean_" + slug + ":" + kind, "all")
         let had = redact(to_string(kv_exists(mk)), "hash_only")
         if had == REF_TRUE {
           let c = inc.DutyCloseIncident(slug, kind, open_id)

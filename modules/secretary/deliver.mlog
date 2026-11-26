@@ -275,7 +275,8 @@ pattern SecBootstrap() -> String {
       deliver_found = deliver_found + 1.0
     }
     if is_old == REF_TRUE {
-      let _ = cron_remove(to_string(cj.id))
+      // №952: мост id из cron_list (см. deadlines/run.mlog).
+      let _ = cron_remove(redact(to_string(cj.id), "all"))
       deliver_removed_old = deliver_removed_old + 1.0
     }
   }
@@ -320,14 +321,14 @@ pattern SecBootstrap() -> String {
     let is_old_sum = redact(to_string(contains(p2, "secretary-summary")), "hash_only")
     let is_new_sum = redact(to_string(p2 == "SecSummaryOnce"), "hash_only")
     if is_old_sum == REF_TRUE {
-      let _ = cron_remove(to_string(cj2.id))
+      let _ = cron_remove(redact(to_string(cj2.id), "all"))  // №952
       removed = removed + 1.0
     }
     if is_new_sum == REF_TRUE {
       let pair = p2 + "|" + to_string(cj2.payload)
       let in_wanted = redact(to_string(contains(wanted_pairs, pair)), "hash_only")
       if in_wanted != REF_TRUE {
-        let _ = cron_remove(to_string(cj2.id))
+        let _ = cron_remove(redact(to_string(cj2.id), "all"))  // №952
         removed = removed + 1.0
       }
     }

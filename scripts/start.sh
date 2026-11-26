@@ -30,6 +30,13 @@ PORT=10000
 touch /app/data/.keep
 /app/scripts/seed-data.sh
 
+# №259 (переход v0.40.1, 26.11): env() в телах маршрутов serve — явный ключ
+
+# (allowlist METALOGOS_ENV_ALLOWLIST скоупит имена, см. entrypoint).
+
+METALOGOS_SERVE_ALLOW_ENV=1 \
+
+
 mlog serve app.mlog &
 PID=$!
 term() { kill -TERM "$PID" 2>/dev/null || true; }
