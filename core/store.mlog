@@ -91,6 +91,10 @@ pattern SiteInit(slug: String) -> String {
   // повторная инициализация не перезаписывает чужой/свой маркер.
   let _ = db_execute_with_grant(g, "CREATE TABLE IF NOT EXISTS site.meta (k TEXT PRIMARY KEY, v TEXT)", [])
   let _ = db_execute_with_grant(g, "INSERT OR IGNORE INTO site.meta (k, v) VALUES ('slug', ?1)", [slug])
-  let _ = kv_set("acc_inited_" + slug, "1")
+  // №952 (переход v0.40.1, 25.11): slug приходит из паспорта сайта
+  // (file-read → untrusted) — kv_set с untrusted-ключом = отказ
+  // TAINT_PERSISTENCE в runtime-линии (диагностический маркер: мост
+  // redact(…, "all") у источника, ADR-0154 §10 — ключ не искажается).
+  let _ = kv_set(redact("acc_inited_" + slug, "all"), "1")
   return "ok"
 }
