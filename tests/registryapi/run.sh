@@ -53,6 +53,12 @@ MOCK=$!
 # Мост №325/ADR-0161 (шаг 4 миграции 0.39.1→0.40.0): serve-копия несёт
 # окно egress — runtime-линия №952 (OpenPR: sha из ответа GitHub в URL
 # следующего шага — форма №951) уходит в audit-события. ОДНО окно релиза.
+# 27.11 (эксперимент #57): окно НЕСУЩЕЕ — без него шаг 2 Git Data API
+# (/git/commits/{base_sha}) отказывает на B6-гейте (адрес гейтится по
+# конфиденциальности; value-preserving санитайзер trust-оси в языке
+# отсутствует, entropy-net маскирует hex-run ≥32). Снятие = апстрим
+# (direction-per-argument / duplex role — owner decision, threat-model
+# §«open model question behind B6»). Детали: fosved-acc #57.
 { printf '%s\n' "profile legacy { egress: permissive_with_audit }"; cat app.mlog; } > "$AUG1"
 
 # №259 (переход v0.40.1, 26.11): env() в телах маршрутов serve — явный ключ
